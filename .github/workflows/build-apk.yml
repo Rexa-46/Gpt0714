@@ -1,0 +1,159 @@
+name: Build Android APK + AAB
+
+# Builds a debug APK automatically every time you push to main, entirely on
+# GitHub's own servers — this sidesteps local network/DNS problems (like
+# ISP hijacking Gradle's download requests) since GitHub's runners have a
+# clean, direct connection to Google/Gradle's servers.
+#
+# Hardening notes (checked against GitHub's actual runner image, Aug 2026):
+# - Pinned to ubuntu-24.04 explicitly (not "ubuntu-latest", which can move
+#   to a newer/different image without warning and change preinstalled tools).
+# - Uses the JDK 21 that's already bundled on the runner image instead of
+#   downloading one — faster and removes a possible failure point.
+# - The Android SDK platforms/build-tools this app needs (Capacitor 8 =
+#   API 36) are already preinstalled on ubuntu-24.04 runners, so no SDK
+#   download is normally needed either.
+# - android/ is intentionally NOT committed to the repo (see .gitignore):
+#   it's regenerated fresh by `cap add android` on every run, so it always
+#   matches whatever Capacitor version is pinned in package.json — no stale
+#   generated files to go out of sync.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# لازم برای ساخت «Release» و پیوست‌کردن APK (دانلود و به‌روزرسانی داخل برنامه از همین‌جا انجام می‌شود)
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use the JDK 21 already on this runner (no download needed)
+        run: echo "JAVA_HOME=$JAVA_HOME_21_X64" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Print tool versions (for debugging if something fails)
+        run: |
+          echo "Node: $(node -v)"
+          echo "npm: $(npm -v)"
+          echo "Java: $JAVA_HOME"
+          java -version
+          echo "ANDROID_HOME: $ANDROID_HOME"
+
+      - name: Install JS dependencies
+        run: npm install --legacy-peer-deps
+
+      - name: Build web app
+        run: npm run build
+        env:
+          # شماره‌ی ساخت و نام ریپو داخل برنامه قرار می‌گیرد تا «بررسی به‌روزرسانی» کار کند
+          VITE_BUILD_NUMBER: ${{ github.run_number }}
+          VITE_GITHUB_REPO: ${{ github.repository }}
+
+      - name: Add Android platform (regenerated fresh every run)
+        run: npx cap add android
+
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      - name: Enable Android SMS permissions for Rexa APK
+        run: node scripts/patch-android-sms.mjs
+
+      - name: Generate app icon and splash screen (Rexa branding)
+        run: npm run gen:assets
+
+      - name: Sync Capacitor again (picks up generated icons)
+        run: npx cap sync android
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - name: Accept Android SDK licenses (safety net, ignored if already accepted)
+        continue-on-error: true
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
+
+      - name: Ensure required Android SDK platform is installed (safety net)
+        continue-on-error: true
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0" || true
+
+      - name: Set Android versionCode to the build number (needed so a new APK counts as an update)
+        run: |
+          sed -i "s/versionCode 1/versionCode ${{ github.run_number }}/; s/versionName \"1.0\"/versionName \"1.0.${{ github.run_number }}\"/" android/app/build.gradle
+          grep -n "versionCode\|versionName" android/app/build.gradle
+
+      - name: Use the fixed signing key (so each new APK installs over the previous one)
+        env:
+          KS_B64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KS_B64" ]; then
+            echo "::error::Secret DEBUG_KEYSTORE_BASE64 is not set (it must be a *repository* secret under Settings > Secrets and variables > Actions). Stopping, because an APK signed with a throwaway key can NOT be installed over the previous version."
+            exit 1
+          fi
+          mkdir -p ~/.android
+          echo "$KS_B64" | base64 -d > ~/.android/debug.keystore
+          echo "Using the fixed signing key from the DEBUG_KEYSTORE_BASE64 secret."
+          keytool -list -v -keystore ~/.android/debug.keystore -storepass android | grep -E "Alias name|SHA256"
+
+      - name: Force Gradle to sign with the fixed key
+        run: node scripts/patch-android-signing.mjs
+
+      - name: Build signed APK and AAB
+        working-directory: android
+        run: chmod +x ./gradlew && ./gradlew assembleDebug bundleRelease --no-daemon --stacktrace
+
+      - name: Show the APK signing fingerprint (must be identical in every build)
+        run: |
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          OUT=$("$APKSIGNER" verify --print-certs android/app/build/outputs/apk/debug/app-debug.apk)
+          echo "$OUT" | grep -E "SHA-256|Signer"
+          APK_FP=$(echo "$OUT" | grep -m1 "SHA-256 digest" | sed 's/.*: //' | tr -d ': ' | tr 'A-Z' 'a-z')
+          KS_FP=$(keytool -list -v -keystore ~/.android/debug.keystore -storepass android | grep -m1 "SHA256:" | sed 's/.*SHA256: //' | tr -d ': ' | tr 'A-Z' 'a-z')
+          echo "APK fingerprint:      $APK_FP"
+          echo "Expected fingerprint: $KS_FP"
+          if [ "$APK_FP" != "$KS_FP" ]; then
+            echo "::error::The APK is NOT signed with the fixed key; it would not install over the previous version."
+            exit 1
+          fi
+
+      - name: Verify release AAB exists
+        run: test -f android/app/build/outputs/bundle/release/app-release.aab
+
+      - name: Upload APK + AAB artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rexa-android-builds
+          path: |
+            android/app/build/outputs/apk/debug/app-debug.apk
+            android/app/build/outputs/bundle/release/app-release.aab
+
+      - name: Name release files
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk "Rexa-build-${{ github.run_number }}.apk"
+          cp android/app/build/outputs/bundle/release/app-release.aab "Rexa-build-${{ github.run_number }}.aab"
+
+      - name: Publish GitHub Release (free distribution / download)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Rexa build ${{ github.run_number }}
+          files: |
+            Rexa-build-${{ github.run_number }}.apk
+            Rexa-build-${{ github.run_number }}.aab
+          generate_release_notes: true
+          make_latest: true
