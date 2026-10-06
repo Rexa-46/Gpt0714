@@ -3011,6 +3011,7 @@ function TransactionSummaryChart({ transactions, onSelect }) {
 function TransactionsView({ transactions, catById, accById, checks = [], filter, setFilter, onDelete, onEdit, search, setSearch }) {
   const t = useT();
   const [preview, setPreview] = useState(null);
+  const [expandedId, setExpandedId] = useState(null);
   const checkStatusLabel = { pending: "در انتظار", cashed: "نقد شده", bounced: "برگشتی" };
   const checkPseudo = checks.map((c) => ({
     id: "chk-" + c.id, __isCheck: true, type: "check", amount: c.amount, date: c.dueDate,
@@ -3072,8 +3073,21 @@ function TransactionsView({ transactions, catById, accById, checks = [], filter,
                         </div>
                         <div style={{ textAlign: "left" }}>
                           <div style={{ fontWeight: 800, color: statusColor2, fontSize: 14.5 }}>{toFaInt(tx.amount)}</div>
+                          <button onClick={() => setExpandedId(expandedId === tx.id ? null : tx.id)} style={{ marginTop: 6, background: expandedId === tx.id ? BRAND.violet : "#f1eef4", color: expandedId === tx.id ? "#fff" : "#5f566b", border: "none", borderRadius: 7, padding: "5px 9px", fontSize: 11, fontWeight: 700 }}>{expandedId === tx.id ? "بستن" : "جزئیات"}</button>
                         </div>
                       </div>
+                      {expandedId === tx.id && (() => {
+                        const c = checks.find(x => x.id === tx.id.replace("chk-", ""));
+                        return c ? <div style={{ marginTop: 10, padding: 10, borderRadius: 9, background: "#f8f6fa", fontSize: 11.5 }}>
+                          {[
+                            ["نوع", c.type === "received" ? "چک دریافتی" : "چک پرداختی"],
+                            ["طرف حساب", c.payee || "—"], ["مبلغ", `${toFaInt(c.amount)} ریال`],
+                            ["شناسه صیادی", c.sayadId || "—"], ["شماره چک", c.checkNumber || "—"],
+                            ["حساب", accById(c.accountId)?.name || "—"], ["سررسید", c.dueDate ? faLongDate(new Date(c.dueDate)) : "—"],
+                            ["وضعیت", checkStatusLabel[c.status] || "—"], ["یادداشت", c.note || "—"]
+                          ].map(([k,v]) => <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "5px 0", borderBottom: `1px solid ${t.border}` }}><span style={{ color: t.sub }}>{k}</span><strong>{v}</strong></div>)}
+                        </div> : null;
+                      })()}
                     </div>
                   );
                 }
@@ -3102,11 +3116,33 @@ function TransactionsView({ transactions, catById, accById, checks = [], filter,
                       <div style={{ textAlign: "left" }}>
                         <div style={{ fontWeight: 800, color, fontSize: 14.5 }}>{toFaInt(tx.amount)}</div>
                         <div style={{ display: "flex", gap: 4, marginTop: 6 }}>
+                          <button onClick={() => setExpandedId(expandedId === tx.id ? null : tx.id)} style={{ background: expandedId === tx.id ? BRAND.violet : "#f1eef4", border: "none", color: expandedId === tx.id ? "#fff" : "#5f566b", cursor: "pointer", padding: "5px 8px", borderRadius: 7, fontSize: 11, fontWeight: 700 }} title="جزئیات">{expandedId === tx.id ? "بستن" : "جزئیات"}</button>
                           <button onClick={() => onEdit?.(tx)} style={{ background: "none", border: "none", color: BRAND.violet, cursor: "pointer", padding: 3 }} title="ویرایش"><Pencil size={15} /></button>
                           <button onClick={() => { if (window.confirm("این تراکنش حذف شود؟")) onDelete(tx.id); }} style={{ background: "none", border: "none", color: BRAND.crimson, cursor: "pointer", padding: 3 }} title="حذف"><Trash2 size={15} /></button>
                         </div>
                       </div>
                     </div>
+                    {expandedId === tx.id && (
+                      <div style={{ marginTop: 10, padding: 11, borderRadius: 10, background: "#f8f6fa", border: "1px solid #ebe6f0", fontSize: 11.5 }}>
+                        <div style={{ fontWeight: 800, fontSize: 13, marginBottom: 8 }}>جزئیات کامل تراکنش</div>
+                        {[
+                          ["نوع", tx.type === "expense" ? "هزینه / پرداخت" : tx.type === "income" ? "درآمد / دریافت" : "انتقال بین حساب‌ها"],
+                          ["مبلغ", `${toFaInt(tx.amount)} ریال`],
+                          ["تاریخ", tx.date ? faLongDate(new Date(tx.date)) : "—"],
+                          ["ساعت", tx.time || "—"],
+                          ["حساب", acc?.name || "—"],
+                          ["حساب مقصد", toAcc?.name || "—"],
+                          ["دسته‌بندی", cat?.name || "—"],
+                          ["شرح", tx.note || "—"],
+                          ["برچسب‌ها", (tx.tags || []).join("، ") || "—"],
+                          ["طرف حساب", tx.payee || tx.counterparty || "—"],
+                          ["عضو / پروژه", tx.project || tx.member || tx.event || "—"],
+                          ["منبع ثبت", tx.sourceType || "ثبت دستی"],
+                          ["شناسه تراکنش", tx.id || "—"],
+                          ["شناسه مرتبط", tx.sourceId || tx.loanId || tx.debtId || tx.billId || tx.assetId || "—"],
+                        ].map(([k,v]) => <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "5px 0", borderBottom: `1px solid ${t.border}` }}><span style={{ color: t.sub }}>{k}</span><strong style={{ textAlign: "left", maxWidth: "65%", wordBreak: "break-word" }}>{v}</strong></div>)}
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -4224,6 +4260,7 @@ function RecurringManager({ recurring, setRecurring, categories, accounts }) {
 --------------------------------------------------------- */
 function ChecksManager({ checks, setChecks, accounts = [], setTransactions }) {
   const st = useStyles();
+  const [expandedId, setExpandedId] = useState(null);
   const [form, setForm] = useState({ type: "received", payee: "", amount: "", dueDate: todayISO(), note: "", sayadId: "", checkNumber: "", accountId: "" });
   function add() {
     if (!form.payee || !form.amount || !form.checkNumber || form.sayadId.length < 16 || form.sayadId.length > 20) return;
@@ -4291,6 +4328,9 @@ function ChecksManager({ checks, setChecks, accounts = [], setTransactions }) {
               </span>
               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 <StatusBadge text={statusLabel[c.status]} color={statusColor[c.status]} />
+                <button onClick={() => setExpandedId(expandedId === c.id ? null : c.id)} style={{ background: expandedId === c.id ? BRAND.violet : "#f1eef4", color: expandedId === c.id ? "#fff" : "#5f566b", border: "none", borderRadius: 7, padding: "5px 9px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                  {expandedId === c.id ? "بستن جزئیات" : "جزئیات"}
+                </button>
                 <select value={c.status} onChange={(e) => {
                   const next = e.target.value;
                   setChecks((p) => p.map((x) => x.id === c.id ? { ...x, status: next, ...(next === "pending" ? { linkedTransactionId: "" } : {}) } : x));
@@ -4307,6 +4347,27 @@ function ChecksManager({ checks, setChecks, accounts = [], setTransactions }) {
                 <button onClick={() => { setChecks((p) => p.filter((x) => x.id !== c.id)); setTransactions?.((p) => p.filter((t) => !(t.sourceType === "check" && t.sourceId === c.id))); }} style={{ background: "none", border: "none", color: BRAND.crimson, cursor: "pointer" }}><Trash2 size={15} /></button>
               </div>
             </div>
+            {expandedId === c.id && (
+              <div style={{ margin: "8px 0 2px", padding: 12, borderRadius: 10, background: "#f8f6fa", border: "1px solid #ebe6f0", fontSize: 12 }}>
+                <div style={{ fontWeight: 800, fontSize: 13, marginBottom: 9 }}>جزئیات کامل چک</div>
+                {[
+                  ["نوع", c.type === "received" ? "چک دریافتی" : "چک پرداختی"],
+                  ["طرف حساب", c.payee || "—"],
+                  ["مبلغ", `${toFaInt(c.amount)} ریال`],
+                  ["شناسه صیادی", c.sayadId || "—"],
+                  ["شماره چک", c.checkNumber || "—"],
+                  ["حساب", accounts.find(a => a.id === c.accountId)?.name || "انتخاب نشده"],
+                  ["تاریخ سررسید", c.dueDate ? faLongDate(new Date(c.dueDate)) : "—"],
+                  ["وضعیت", statusLabel[c.status] || "—"],
+                  ["وضعیت سررسید", c.status === "pending" ? (d < 0 ? "سررسید گذشته" : d === 0 ? "امروز" : `${toFaInt(d)} روز مانده`) : "تعیین تکلیف شده"],
+                  ["یادداشت", c.note || "—"],
+                ].map(([k, v]) => (
+                  <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "6px 0", borderBottom: "1px solid #ece8ef" }}>
+                    <span style={{ color: "#81788c" }}>{k}</span><strong style={{ textAlign: "left", direction: k === "شناسه صیادی" || k === "شماره چک" ? "ltr" : "rtl" }}>{v}</strong>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
           );
         })}
@@ -4329,6 +4390,7 @@ const loanInstallmentTx = (l, seq) => {
 };
 function LoansManager({ loans, setLoans, accounts = [], categories = [], addCategory, setTransactions }) {
   const st = useStyles();
+  const [expandedId, setExpandedId] = useState(null);
   const emptyForm = () => ({ title: "", principal: "", installments: "", monthlyPayment: "", startDate: todayISO(), spent: false, accountId: "" });
   const [form, setForm] = useState(emptyForm());
   const [editingId, setEditingId] = useState(null);
@@ -4416,12 +4478,41 @@ function LoansManager({ loans, setLoans, accounts = [], categories = [], addCate
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
                 <span style={{ fontWeight: 700, fontSize: 14 }}>{l.title}{l.spent && <span style={{ marginRight: 8, fontSize: 10.5, fontWeight: 700, padding: "2px 8px", borderRadius: 10, background: "#f1eef4", color: "#6b6377" }}>خرج‌شده</span>}</span>
                 <span style={{ display: "flex", gap: 4 }}>
+                  <button onClick={() => setExpandedId(expandedId === l.id ? null : l.id)} aria-label="جزئیات" title="جزئیات کامل" style={{ background: expandedId === l.id ? BRAND.violet : "#f1eef4", color: expandedId === l.id ? "#fff" : "#5f566b", border: "none", borderRadius: 7, padding: "5px 9px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>{expandedId === l.id ? "بستن" : "جزئیات"}</button>
                   <button onClick={() => startEdit(l)} aria-label="ویرایش" style={{ background: "none", border: "none", color: BRAND.violet, cursor: "pointer" }}><Pencil size={15} /></button>
                   <button onClick={() => removeLoan(l)} aria-label="حذف" style={{ background: "none", border: "none", color: BRAND.crimson, cursor: "pointer" }}><Trash2 size={15} /></button>
                 </span>
               </div>
               <div style={{ fontSize: 12.5, color: "#8a8194", marginBottom: 4 }}>قسط {toFaInt(l.paidCount)} از {toFaInt(l.installments)} پرداخت شده — سررسید بعدی: {l.paidCount < l.installments ? faLongDate(new Date(nextDue)) : "تسویه شده"}</div>
               <div style={{ fontSize: 12, color: "#8a8194", marginBottom: 6 }}>{l.accountId && accName(l.accountId) ? `حساب بانکی: ${accName(l.accountId)}` : "بدون اتصال به حساب بانکی"}</div>
+              {expandedId === l.id && (() => {
+                const totalPaid = Number(l.paidCount || 0) * Number(l.monthlyPayment || 0);
+                const totalInterest = Math.max(0, Number(l.installments || 0) * Number(l.monthlyPayment || 0) - Number(l.principal || 0));
+                const remainingInstallments = Math.max(0, Number(l.installments || 0) - Number(l.paidCount || 0));
+                return (
+                  <div style={{ margin: "8px 0 10px", padding: 12, borderRadius: 10, background: "#f8f6fa", border: "1px solid #ebe6f0", fontSize: 12 }}>
+                    <div style={{ fontWeight: 800, fontSize: 13, marginBottom: 9 }}>جزئیات کامل وام</div>
+                    {[
+                      ["اصل وام", `${toFaInt(l.principal)} ریال`],
+                      ["مبلغ هر قسط", `${toFaInt(l.monthlyPayment)} ریال`],
+                      ["کل اقساط", toFaInt(l.installments)],
+                      ["اقساط پرداخت‌شده", toFaInt(l.paidCount)],
+                      ["اقساط باقی‌مانده", toFaInt(remainingInstallments)],
+                      ["مجموع پرداخت‌شده", `${toFaInt(totalPaid)} ریال`],
+                      ["سود/هزینه تأمین مالی", `${toFaInt(totalInterest)} ریال`],
+                      ["مانده بدهی", `${toFaInt(Math.max(remaining, 0))} ریال`],
+                      ["حساب بانکی", accName(l.accountId) || "انتخاب نشده"],
+                      ["تاریخ شروع", l.startDate ? faLongDate(new Date(l.startDate)) : "—"],
+                      ["سررسید بعدی", l.paidCount < l.installments ? faLongDate(new Date(nextDue)) : "تسویه شده"],
+                      ["وضعیت", l.paidCount >= l.installments ? "تسویه شده" : (l.spent ? "وام قدیمی / خرج‌شده" : "فعال")],
+                    ].map(([k, v]) => (
+                      <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "6px 0", borderBottom: "1px solid #ece8ef" }}>
+                        <span style={{ color: "#81788c" }}>{k}</span><strong>{v}</strong>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                 <span style={{ fontWeight: 700, color: remaining > 0 ? BRAND.crimson : BRAND.darkgreen }}>باقی‌مانده: {toFaInt(Math.max(remaining, 0))} ریال</span>
                 <span style={{ display: "flex", gap: 6 }}>
