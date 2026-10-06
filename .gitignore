@@ -1,0 +1,5 @@
+
+# Local Android signing material - NEVER commit
+*.keystore
+*.jks
+debug-keystore-base64.txt

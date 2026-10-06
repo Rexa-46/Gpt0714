@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+    <title>Rexa</title>
+    <meta name="theme-color" content="#3E1461" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Rexa" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" type="image/png" sizes="48x48" href="./icons/favicon-48.png" />
+    <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <style>
+      html, body, #root { height: 100%; margin: 0; padding: 0; background: #F1EFF4; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./src/main.jsx"></script>
+    <script>
+      // نسخه‌ی وب (GitHub Pages): نصب‌شدنی و قابل اجرای آفلاین. در APK فعال نمی‌شود.
+      (function () {
+        var native = window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform();
+        if (!native && !window.androidBridge && location.hostname !== "localhost" && "serviceWorker" in navigator && location.protocol === "https:") {
+          window.addEventListener("load", function () { navigator.serviceWorker.register("./sw.js").catch(function () {}); });
+        }
+      })();
+    </script>
+  </body>
+</html>
