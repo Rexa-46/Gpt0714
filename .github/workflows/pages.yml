@@ -1,0 +1,57 @@
+name: Deploy web app to GitHub Pages
+
+# نسخه‌ی وب Rexa (نصب‌شدنی روی گوشی و کامپیوتر، قابل اجرای آفلاین) را با هر push روی main
+# در GitHub Pages منتشر می‌کند. فقط یک بار در ریپو:
+#   Settings → Pages → Build and deployment → Source: «GitHub Actions»
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install JS dependencies
+        run: npm install --legacy-peer-deps
+
+      - name: Build web app
+        run: npm run build
+        env:
+          VITE_BUILD_NUMBER: ${{ github.run_number }}
+          VITE_GITHUB_REPO: ${{ github.repository }}
+
+      - name: Stamp the service worker cache with this build
+        run: sed -i "s/__BUILD__/${{ github.run_number }}/" dist/sw.js
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
