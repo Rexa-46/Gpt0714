@@ -2277,30 +2277,30 @@ export default function App() {
   const totalBalance = useMemo(() => accounts.reduce((s, a) => s + accountBalance(a.id), 0), [accounts, accountBalance]);
   const totalAssets = useMemo(() => assets.reduce((s, a) => s + (a.quantity * a.currentPrice || 0), 0), [assets]);
 
-  const yearTx = useMemo(() => transactions.filter((t) => jalaliYear(new Date(t.date)) === year), [transactions, year]);
-  const totalIncomeYear = useMemo(() => yearTx.filter((t) => t.type === "income" && isPnlTransaction(t)).reduce((s, t) => s + pnlAmount(t), 0), [yearTx]);
-  const totalExpenseYear = useMemo(() => yearTx.filter((t) => t.type === "expense" && isPnlTransaction(t)).reduce((s, t) => s + pnlAmount(t), 0), [yearTx]);
+  const yearTransactions = useMemo(() => transactions.filter((t) => jalaliYear(new Date(t.date)) === year), [transactions, year]);
+  const totalIncomeYear = useMemo(() => yearTransactions.filter((t) => t.type === "income" && isPnlTransaction(t)).reduce((s, t) => s + pnlAmount(t), 0), [yearTransactions]);
+  const totalExpenseYear = useMemo(() => yearTransactions.filter((t) => t.type === "expense" && isPnlTransaction(t)).reduce((s, t) => s + pnlAmount(t), 0), [yearTransactions]);
   const gaugeMax = Math.max(totalIncomeYear, totalExpenseYear, 1);
 
   const expenseByCategory = useMemo(() => {
     const map = {};
-    yearTx.filter((t) => t.type === "expense" && isPnlTransaction(t)).forEach((t) => { map[t.categoryId] = (map[t.categoryId] || 0) + pnlAmount(t); });
+    yearTransactions.filter((t) => t.type === "expense" && isPnlTransaction(t)).forEach((t) => { map[t.categoryId] = (map[t.categoryId] || 0) + pnlAmount(t); });
     return Object.entries(map).map(([catId, amount]) => ({ catId, amount, name: catById(catId)?.name || "بدون دسته" })).sort((a, b) => b.amount - a.amount);
-  }, [yearTx, catById]);
+  }, [yearTransactions, catById]);
   const incomeByCategory = useMemo(() => {
     const map = {};
-    yearTx.filter((t) => t.type === "income" && isPnlTransaction(t)).forEach((t) => { map[t.categoryId] = (map[t.categoryId] || 0) + pnlAmount(t); });
+    yearTransactions.filter((t) => t.type === "income" && isPnlTransaction(t)).forEach((t) => { map[t.categoryId] = (map[t.categoryId] || 0) + pnlAmount(t); });
     return Object.entries(map).map(([catId, amount]) => ({ catId, amount, name: catById(catId)?.name || "بدون دسته" })).sort((a, b) => b.amount - a.amount);
-  }, [yearTx, catById]);
+  }, [yearTransactions, catById]);
 
   function groupBy(idField, list) {
     const map = {};
-    yearTx.filter((tx) => tx.type === "expense" && tx[idField] && isPnlTransaction(tx)).forEach((tx) => { map[tx[idField]] = (map[tx[idField]] || 0) + pnlAmount(tx); });
+    yearTransactions.filter((tx) => tx.type === "expense" && tx[idField] && isPnlTransaction(tx)).forEach((tx) => { map[tx[idField]] = (map[tx[idField]] || 0) + pnlAmount(tx); });
     return Object.entries(map).map(([id, amount]) => ({ id, amount, name: list.find((x) => x.id === id)?.name || "—" })).sort((a, b) => b.amount - a.amount);
   }
-  const expenseByMember = useMemo(() => groupBy("memberId", members), [yearTx, members]);
-  const expenseByEvent = useMemo(() => groupBy("eventId", events), [yearTx, events]);
-  const expenseByProject = useMemo(() => groupBy("projectId", projects), [yearTx, projects]);
+  const expenseByMember = useMemo(() => groupBy("memberId", members), [yearTransactions, members]);
+  const expenseByEvent = useMemo(() => groupBy("eventId", events), [yearTransactions, events]);
+  const expenseByProject = useMemo(() => groupBy("projectId", projects), [yearTransactions, projects]);
 
   // net worth trend: last 8 months
   const netWorthTrend = useMemo(() => {
@@ -2622,7 +2622,7 @@ export default function App() {
                 open={open} toggle={toggle}
                 accounts={accounts} accountBalance={accountBalance}
                 expenseByCategory={expenseByCategory} incomeByCategory={incomeByCategory}
-                budgets={budgets} categories={categories} transactions={yearTx} allTransactions={transactions}
+                budgets={budgets} categories={categories} transactions={yearTransactions} allTransactions={transactions}
                 bills={bills} loans={loans} checks={checks} assets={assets} totalAssets={totalAssets} persons={persons} debts={debts}
                 openAccounts={() => { setAccountEditTarget(null); setSubView("accounts"); }} onEditAccount={(a) => { setAccountEditTarget(a); setSubView("accounts"); }} openBudgets={() => setSubView("budgets")}
                 openBills={() => setSubView("bills")} openLoans={() => setSubView("loans")} openPersons={() => setSubView("persons")} openDebts={() => setSubView("debts")}
@@ -2838,7 +2838,7 @@ function HomeView({
         </>);
       }
       case "expense": {
-        const rows = yearTx.filter((tx) => tx.type === "expense" && isPnlTransaction(tx));
+        const rows = yearTransactions.filter((tx) => tx.type === "expense" && isPnlTransaction(tx));
         if (!rows.length) return <EmptyRow text="هزینه‌ای ثبت نشده" />;
         return rows.slice().sort((a,b) => String(b.date||"").localeCompare(String(a.date||""))).map((tx) => {
           const id = `expense:${tx.id}`; const expanded = operationExpandedId === id;
@@ -2846,7 +2846,7 @@ function HomeView({
         });
       }
       case "income": {
-        const rows = yearTx.filter((tx) => tx.type === "income" && isPnlTransaction(tx));
+        const rows = yearTransactions.filter((tx) => tx.type === "income" && isPnlTransaction(tx));
         if (!rows.length) return <EmptyRow text="درآمدی ثبت نشده" />;
         return rows.slice().sort((a,b) => String(b.date||"").localeCompare(String(a.date||""))).map((tx) => {
           const id = `income:${tx.id}`; const expanded = operationExpandedId === id;
