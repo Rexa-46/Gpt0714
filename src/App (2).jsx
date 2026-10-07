@@ -801,6 +801,15 @@ function CollapsibleSection({ color, title, open, onToggle, children, badge, onA
   );
 }
 
+function useFocusScroll(focusId) {
+  useEffect(() => {
+    if (!focusId) return;
+    const tm = setTimeout(() => {
+      try { document.querySelector(`[data-rec="${String(focusId).replace(/"/g, "")}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" }); } catch {}
+    }, 180);
+    return () => clearTimeout(tm);
+  }, [focusId]);
+}
 function Row({ leftIcon, leftColor = "#eee", title, subtitle, value, valueColor, onClick, chevron = "left", extra }) {
   const t = useT();
   return (
@@ -2102,6 +2111,13 @@ export default function App() {
     setTab("home");
   }
 
+  function openHomeCategory(kind, catId) {
+    setFocusTarget({ kind, categoryId: String(catId), year });
+    setSubView(kind === "income" ? "incomes" : "expenses");
+    setMenuOpen(false);
+    setTab("home");
+  }
+
   const shared = settings.sharedFamily;
 
   const reloadAll = useCallback(async (sh) => {
@@ -2273,7 +2289,13 @@ export default function App() {
     startTransition(() => setTransactions((p) => p.filter((t) => t.id !== id)));
   }
   function addAccount(a) { const item = { ...a, id: a.id || uid() }; setAccounts((p) => [...p, item]); return item.id; }
-  function deleteAccount(id) { setAccounts((p) => p.filter((a) => a.id !== id)); }
+  function deleteAccount(id) {
+    // حساب دارای تراکنش یا وام حذف نمی‌شود تا حسابداری به‌هم نخورد؛ فقط بایگانی می‌شود
+    const used = transactions.some((t) => t.accountId === id || t.toAccountId === id) || loans.some((l) => l.accountId === id);
+    if (used) { setAccounts((p) => p.map((a) => a.id === id ? { ...a, archived: true } : a)); return; }
+    setAccounts((p) => p.filter((a) => a.id !== id));
+  }
+  const liveAccounts = useMemo(() => accounts.filter((a) => !a.archived), [accounts]);
   function updateAccount(id, patch) { setAccounts((p) => p.map((a) => a.id === id ? { ...a, ...patch } : a)); }
   function addCategory(c) { const item = { ...c, id: c.id || uid() }; setCategories((p) => [...p, item]); return item.id; }
   function deleteCategory(id) { setCategories((p) => p.filter((c) => c.id !== id && c.parentId !== id)); }
@@ -2499,7 +2521,7 @@ export default function App() {
 
 
   const ctx = {
-    accounts, addAccount, deleteAccount, updateAccount, accountBalance, accountEditTarget, setAccountEditTarget,
+    accounts: liveAccounts, allAccounts: accounts, addAccount, deleteAccount, updateAccount, accountBalance, accountEditTarget, setAccountEditTarget,
     categories, addCategory, deleteCategory, updateCategory,
     budgets, upsertBudget, expenseByCategory, incomeByCategory,
     loans, setLoans, checks, setChecks, bills, setBills, assets, setAssets,
@@ -2558,7 +2580,7 @@ export default function App() {
                 year={year} setYear={setYear}
                 totalIncomeYear={totalIncomeYear} totalExpenseYear={totalExpenseYear} gaugeMax={gaugeMax}
                 open={open} toggle={toggle}
-                accounts={accounts} accountBalance={accountBalance}
+                accounts={liveAccounts} accountBalance={accountBalance}
                 expenseByCategory={expenseByCategory} incomeByCategory={incomeByCategory}
                 budgets={budgets} categories={categories} transactions={yearTx} allTransactions={transactions}
                 bills={bills} loans={loans} checks={checks} assets={assets} totalAssets={totalAssets} persons={persons} debts={debts}
@@ -2573,6 +2595,7 @@ export default function App() {
                 openShortcuts={() => setSubView("shortcuts")}
                 onOpenTransactions={() => setTab("transactions")}
                 onOpenRecord={openHomeRecord}
+                onOpenCategory={openHomeCategory}
                 onAddTransaction={(type) => { setPrefillTx(type ? { type } : null); setShowAdd(true); }}
               />
             )}
@@ -2643,7 +2666,7 @@ export default function App() {
 
         {showAdd && (
           <AddTransactionSheet
-            accounts={accounts} categories={categories} favorites={favorites}
+            accounts={prefillTx?.accountId ? accounts.filter((a) => !a.archived || a.id === prefillTx.accountId) : liveAccounts} categories={categories} favorites={favorites}
             onAddAccount={addAccount} onAddCategory={addCategory}
             members={members} events={events} projects={projects}
             initial={prefillTx}
@@ -2669,7 +2692,7 @@ function HomeView({
   accounts, accountBalance, expenseByCategory, incomeByCategory, budgets, categories,
   transactions, allTransactions, bills, loans, checks, assets, totalAssets, persons = [], debts = [],
   openAccounts, onEditAccount, openBudgets, openBills, openLoans, openChecks, openAssets, openPersons, openDebts, openSubView,
-  homeDay, setHomeDay, catById, settings, setSettings, rates, fetchRates, onNote, onReminder, onAddTransaction, shortcuts = [], onRunShortcut, openShortcuts, onOpenTransactions
+  homeDay, setHomeDay, catById, settings, setSettings, rates, fetchRates, onNote, onReminder, onAddTransaction, shortcuts = [], onRunShortcut, openShortcuts, onOpenTransactions, onOpenCategory
 }) {
   const t = useT();
   const banks = accounts.filter((a) => a.type === "bank");
@@ -2696,6 +2719,14 @@ function HomeView({
     bills: { color: BRAND.crimson, title: "یادآوری قبض ها", icon: <BellRing size={20} /> },
   };
 
+  function latestTx(type, catId) {
+    let best = null;
+    for (const tx of transactions) {
+      if (tx.type !== type || tx.categoryId !== catId) continue;
+      if (!best || `${tx.date || ""}${tx.time || ""}` > `${best.date || ""}${best.time || ""}`) best = tx;
+    }
+    return best;
+  }
   function loanRemaining(l) {
     const principal = Number(l?.principal || 0);
     const installments = Math.max(1, Number(l?.installments || 0));
@@ -2751,9 +2782,9 @@ function HomeView({
         </>);
       }
       case "expense":
-        return expenseByCategory.length === 0 ? <EmptyRow text="هزینه‌ای ثبت نشده" /> : expenseByCategory.map((e) => { const first = allTransactions.find((tx) => tx.type === "expense" && tx.categoryId === e.catId); return <Row key={e.catId} title={e.name} value={formatMoney(e.amount, currency, usdRate)} valueColor={BRAND.crimson} onClick={() => first ? onOpenRecord?.("expense", first.id) : undefined} />; });
+        return expenseByCategory.length === 0 ? <EmptyRow text="هزینه‌ای ثبت نشده" /> : expenseByCategory.map((e) => { return <Row key={e.catId} title={e.name} value={formatMoney(e.amount, currency, usdRate)} valueColor={BRAND.crimson} onClick={() => onOpenCategory?.("expense", e.catId)} />; });
       case "income":
-        return incomeByCategory.length === 0 ? <EmptyRow text="درآمدی ثبت نشده" /> : incomeByCategory.map((e) => { const first = allTransactions.find((tx) => tx.type === "income" && tx.categoryId === e.catId); return <Row key={e.catId} title={e.name} value={formatMoney(e.amount, currency, usdRate)} valueColor={BRAND.darkgreen} onClick={() => first ? onOpenRecord?.("income", first.id) : undefined} />; });
+        return incomeByCategory.length === 0 ? <EmptyRow text="درآمدی ثبت نشده" /> : incomeByCategory.map((e) => { return <Row key={e.catId} title={e.name} value={formatMoney(e.amount, currency, usdRate)} valueColor={BRAND.darkgreen} onClick={() => onOpenCategory?.("income", e.catId)} />; });
       case "banks":
         return (<>
           {[...banks, ...cardAccs].length === 0 && <EmptyRow text="حسابی ثبت نشده" />}
@@ -2807,8 +2838,15 @@ function HomeView({
           </div>
         </>);
       case "contacts":
-        return (<><Row title="اشخاص و طرف حساب‌ها" subtitle={`${toFaInt(persons.length)} نفر`} value="مدیریت" valueColor={BRAND.violet} onClick={() => persons[0] ? onOpenRecord?.("person", persons[0].id) : openPersons?.()} />
-          <Row title="بدهی و طلب" subtitle="مدیریت طرف حساب‌ها" value="مدیریت" valueColor={BRAND.orange} onClick={() => debts[0] ? onOpenRecord?.("debt", debts[0].id) : openDebts?.()} /><Row title="طلب‌های باز" value={`${toFaInt(debts.filter((d) => !d.settled && d.kind === "receivable").reduce((s, d) => s + Number(d.amount || 0), 0))} ریال`} valueColor={BRAND.darkgreen} /><Row title="بدهی‌های باز" value={`${toFaInt(debts.filter((d) => !d.settled && d.kind === "payable").reduce((s, d) => s + Number(d.amount || 0), 0))} ریال`} valueColor={BRAND.crimson} /></>);
+        return (<>
+          <Row title="اشخاص و طرف حساب‌ها" subtitle={`${toFaInt(persons.length)} نفر`} value="مدیریت" valueColor={BRAND.violet} onClick={() => openPersons?.()} />
+          {debts.filter((d) => !d.settled).map((d) => {
+            const person = persons.find((x) => x.id === d.personId);
+            return <Row key={d.id} title={person?.name || "طرف حساب حذف‌شده"} subtitle={d.kind === "receivable" ? "طلب" : "بدهی"} value={`${toFaInt(d.amount)} ریال`} valueColor={d.kind === "receivable" ? BRAND.darkgreen : BRAND.crimson} onClick={() => onOpenRecord?.("debt", d.id)} />;
+          })}
+          <Row title="طلب‌های باز" value={`${toFaInt(debts.filter((d) => !d.settled && d.kind === "receivable").reduce((s, d) => s + Number(d.amount || 0), 0))} ریال`} valueColor={BRAND.darkgreen} />
+          <Row title="بدهی‌های باز" value={`${toFaInt(debts.filter((d) => !d.settled && d.kind === "payable").reduce((s, d) => s + Number(d.amount || 0), 0))} ریال`} valueColor={BRAND.crimson} />
+        </>);
       case "bills":
         return (<>
           {bills.length === 0 && <EmptyRow text="قبضی ثبت نشده" />}
@@ -3094,17 +3132,22 @@ function TransactionsView({ transactions, catById, accById, checks = [], filter,
 /* ---------------------------------------------------------
    Operations View
 --------------------------------------------------------- */
-function OperationsTransactionsManager({ transactions = [], categories = [], accounts = [], filterType = "all", updateTransaction, onDelete, focusId = null }) {
+function OperationsTransactionsManager({ transactions = [], categories = [], accounts = [], filterType = "all", updateTransaction, onDelete, focusId = null, categoryId = null, filterYear = null }) {
   const st = useStyles();
   const t = useT();
+  const [catFilter, setCatFilter] = useState(categoryId);
+  useEffect(() => { setCatFilter(categoryId); }, [categoryId]);
   const [expandedId, setExpandedId] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState(null);
   useEffect(() => { if (focusId && transactions.some((x) => x.id === focusId)) setExpandedId(focusId); }, [focusId, transactions]);
+  useFocusScroll(focusId);
   const catName = (id) => categories.find((c) => c.id === id)?.name || "بدون دسته";
   const accName = (id) => accounts.find((a) => a.id === id)?.name || "حساب نامشخص";
   const rows = [...transactions]
     .filter((tx) => filterType === "all" || tx.type === filterType)
+    .filter((tx) => catFilter == null || String(tx.categoryId) === String(catFilter))
+    .filter((tx) => catFilter == null || !filterYear || jalaliYear(new Date(tx.date)) === filterYear)
     .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")) || String(b.time || "").localeCompare(String(a.time || "")));
   function openDetails(tx) {
     setExpandedId((x) => x === tx.id ? null : tx.id);
@@ -3112,24 +3155,29 @@ function OperationsTransactionsManager({ transactions = [], categories = [], acc
   }
   function openEdit(tx) {
     setExpandedId(tx.id); setEditingId(tx.id);
-    setEditForm({ amount: String(tx.amount || ""), note: tx.note || "", categoryId: tx.categoryId || "", accountId: tx.accountId || "" });
+    setEditForm({ amount: String(tx.amount || ""), note: tx.note || "", categoryId: tx.categoryId || "", accountId: tx.accountId || "", date: tx.date || todayISO() });
   }
   function saveEdit(tx) {
     const amount = Number(String(editForm?.amount || "").replace(/[^0-9.]/g, ""));
     if (!amount || !editForm.accountId) return;
-    updateTransaction?.(tx.id, { amount, note: editForm.note || "", categoryId: editForm.categoryId || tx.categoryId, accountId: editForm.accountId });
+    if (tx.sourceType) updateTransaction?.(tx.id, { note: editForm.note || "" });
+    else updateTransaction?.(tx.id, { amount, note: editForm.note || "", categoryId: editForm.categoryId || tx.categoryId, accountId: editForm.accountId, date: editForm.date || tx.date });
     setEditingId(null); setEditForm(null);
   }
   return <div>
     <div style={{ ...st.card, padding: 12, marginBottom: 12 }}>
-      <div style={{ fontWeight: 800, fontSize: 14 }}>{filterType === "expense" ? "هزینه‌ها" : filterType === "income" ? "درآمدها" : "همه تراکنش‌ها"}</div>
+      <div style={{ fontWeight: 800, fontSize: 14 }}>{filterType === "expense" ? "هزینه‌ها" : filterType === "income" ? "درآمدها" : "همه تراکنش‌ها"}{catFilter != null && ` — ${catName(catFilter === "undefined" ? "" : catFilter)}`}</div>
+      {catFilter != null && <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6, fontSize: 12 }}>
+        <span>مجموع: {toFaInt(rows.reduce((a, x) => a + Number(x.amount || 0), 0))} ریال · {toFaInt(rows.length)} مورد</span>
+        <button onClick={() => setCatFilter(null)} style={{ ...miniBtn, width: "auto", padding: "4px 10px", color: BRAND.violet }}>نمایش همه</button>
+      </div>}
     </div>
     <div style={{ ...st.card, padding: "4px 12px" }}>
       {!rows.length && <EmptyRow text="موردی ثبت نشده" />}
       {rows.map((tx) => {
         const system = !!tx.sourceType;
         const expanded = expandedId === tx.id;
-        return <div key={tx.id} style={{ borderBottom: "1px solid #f0eef3" }}>
+        return <div key={tx.id} data-rec={tx.id} style={{ borderBottom: "1px solid #f0eef3" }}>
           <Row title={tx.note || catName(tx.categoryId)} subtitle={`${tx.type === "expense" ? "هزینه" : "درآمد"} · ${jf(tx.date)} · ${accName(tx.accountId)}`} value={`${toFaInt(tx.amount)} ریال`} valueColor={tx.type === "expense" ? BRAND.crimson : BRAND.darkgreen} leftIcon={expanded ? <ChevronDown size={16}/> : <Eye size={16}/>} leftColor={tx.type === "expense" ? BRAND.crimson : BRAND.green} onClick={() => openDetails(tx)} chevron={null}
             extra={<div style={{display:"flex",gap:4}}><button onClick={(e)=>{e.stopPropagation();openEdit(tx)}} style={{...miniBtn,color:BRAND.violet}} title="ویرایش"><Pencil size={14}/></button>{!system && <button onClick={(e)=>{e.stopPropagation();if(window.confirm("این تراکنش حذف شود؟")) onDelete?.(tx.id)}} style={{...miniBtn,color:BRAND.crimson}} title="حذف"><Trash2 size={14}/></button>}</div>} />
           {expanded && <div style={{ background: "#f8f5fa", borderRadius: 12, margin: "0 0 10px", padding: 12 }}>
@@ -3144,9 +3192,12 @@ function OperationsTransactionsManager({ transactions = [], categories = [], acc
             {tx.note && <div style={{marginTop:8,fontSize:12,lineHeight:1.9}}><b>یادداشت:</b> {tx.note}</div>}
             {system && <div style={{marginTop:8,fontSize:11,color:BRAND.orange,lineHeight:1.8}}>این تراکنش به یک عملیات اصلی متصل است؛ برای جلوگیری از به‌هم‌خوردن حسابداری، حذف مستقیم آن غیرفعال است.</div>}
             {editingId === tx.id && editForm && <div style={{marginTop:10,paddingTop:10,borderTop:"1px solid #e7e0eb"}}>
+              {!system && <>
               <AmountInput value={editForm.amount} onChange={(v)=>setEditForm(f=>({...f,amount:v}))} placeholder="مبلغ" style={{...st.input,marginBottom:7}} />
+              <JalaliDateInput value={editForm.date} onChange={(v)=>setEditForm(f=>({...f,date:v}))} style={{...st.input,marginBottom:7}} />
               <select value={editForm.categoryId} onChange={(e)=>setEditForm(f=>({...f,categoryId:e.target.value}))} style={{...st.input,marginBottom:7}}><option value="">دسته</option>{categories.filter(c=>c.kind===tx.type).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select>
-              <select value={editForm.accountId} onChange={(e)=>setEditForm(f=>({...f,accountId:e.target.value}))} style={{...st.input,marginBottom:7}}>{accounts.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select>
+              <select value={editForm.accountId} onChange={(e)=>setEditForm(f=>({...f,accountId:e.target.value}))} style={{...st.input,marginBottom:7}}>{accounts.filter(a=>!a.archived||a.id===editForm.accountId).map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select>
+              </>}
               <input value={editForm.note} onChange={(e)=>setEditForm(f=>({...f,note:e.target.value}))} placeholder="یادداشت" style={{...st.input,marginBottom:7}} />
               <div style={{display:"flex",gap:7}}><button onClick={()=>saveEdit(tx)} style={{...st.primaryBtn,flex:1}}>ذخیره</button><button onClick={()=>{setEditingId(null);setEditForm(null)}} style={{...st.primaryBtn,flex:.6,background:"#eee",color:"#444"}}>انصراف</button></div>
             </div>}
@@ -3839,9 +3890,9 @@ const SUBVIEW_TITLES = { expenses: "هزینه‌ها", incomes: "درآمدها
 function SubViewContent({ subView, ctx, focusTarget, onBack }) {
   return (
     <div style={{ flex: 1, overflowY: "auto", padding: "20px 16px 112px", paddingTop: "calc(20px + env(safe-area-inset-top, 0px))" }}>
-      {subView === "expenses" && <OperationsTransactionsManager {...ctx} filterType="expense" focusId={focusTarget?.kind === "expense" ? focusTarget.id : null} onDelete={ctx.deleteTransaction} />}
-      {subView === "incomes" && <OperationsTransactionsManager {...ctx} filterType="income" focusId={focusTarget?.kind === "income" ? focusTarget.id : null} onDelete={ctx.deleteTransaction} />}
-      {subView === "cashboxes" && <AccountsManager {...ctx} filterType="fund" focusId={focusTarget?.kind === "fund" ? focusTarget.id : null} />}
+      {subView === "expenses" && <OperationsTransactionsManager {...ctx} accounts={ctx.allAccounts} filterType="expense" categoryId={focusTarget?.kind === "expense" ? focusTarget.categoryId : null} filterYear={focusTarget?.kind === "expense" ? focusTarget.year : null} focusId={focusTarget?.kind === "expense" ? focusTarget.id : null} onDelete={ctx.deleteTransaction} />}
+      {subView === "incomes" && <OperationsTransactionsManager {...ctx} accounts={ctx.allAccounts} filterType="income" categoryId={focusTarget?.kind === "income" ? focusTarget.categoryId : null} filterYear={focusTarget?.kind === "income" ? focusTarget.year : null} focusId={focusTarget?.kind === "income" ? focusTarget.id : null} onDelete={ctx.deleteTransaction} />}
+      {subView === "cashboxes" && <AccountsManager {...ctx} accounts={ctx.allAccounts} filterType="fund" focusId={focusTarget?.kind === "fund" ? focusTarget.id : null} />}
       {subView === "goals" && <GoalsManager {...ctx} />}
       {subView === "coa" && <AccountsTree {...ctx} />}
       {subView === "cloud" && <CloudSyncView {...ctx} />}
@@ -3851,7 +3902,7 @@ function SubViewContent({ subView, ctx, focusTarget, onBack }) {
       {subView === "calculator" && <CalculatorView {...ctx} />}
       {subView === "support" && <SupportView {...ctx} />}
       {subView === "shortcuts" && <ShortcutsManager {...ctx} />}
-      {subView === "accounts" && <AccountsManager {...ctx} focusId={focusTarget?.kind === "account" ? focusTarget.id : null} />}
+      {subView === "accounts" && <AccountsManager {...ctx} accounts={ctx.allAccounts} focusId={focusTarget?.kind === "account" ? focusTarget.id : null} />}
       {subView === "categories" && <CategoriesManager {...ctx} />}
       {subView === "budgets" && <BudgetsManager {...ctx} />}
       {subView === "recurring" && <RecurringManager {...ctx} focusId={focusTarget?.kind === "recurring" ? focusTarget.id : null} />}
@@ -3993,7 +4044,7 @@ function ShortcutsManager({ shortcuts, setShortcuts, categories, accounts }) {
   </div>;
 }
 
-function AccountsManager({ accounts, addAccount, deleteAccount, updateAccount, accountBalance, favorites, toggleFavorite, initialEditAccount, setAccountEditTarget, filterType = "all", focusId = null }) {
+function AccountsManager({ accounts, addAccount, deleteAccount, updateAccount, accountBalance, favorites, toggleFavorite, initialEditAccount, setAccountEditTarget, filterType = "all", focusId = null, transactions = [], loans = [] }) {
   const st = useStyles();
   const [name, setName] = useState("");
   const [type, setType] = useState("bank");
@@ -4004,9 +4055,13 @@ function AccountsManager({ accounts, addAccount, deleteAccount, updateAccount, a
   const [editForm, setEditForm] = useState({ name: "", initial: "", cardNumber: "", expiryDate: "" });
   const [expandedId, setExpandedId] = useState(null);
   useEffect(() => { if (focusId && accounts.some((a) => a.id === focusId)) setExpandedId(focusId); }, [focusId, accounts]);
+  useFocusScroll(focusId);
+  const accountInUse = (a) => transactions.some((t) => t.accountId === a.id || t.toAccountId === a.id) || loans.some((l) => l.accountId === a.id);
+  const fmtCard = (n) => String(n || "").replace(/(\d{4})(?=\d)/g, "$1 ");
 
   useEffect(() => {
     if (!initialEditAccount) return;
+    setExpandedId(initialEditAccount.id);
     setEditingId(initialEditAccount.id);
     setEditForm({
       name: initialEditAccount.name || "",
@@ -4018,12 +4073,13 @@ function AccountsManager({ accounts, addAccount, deleteAccount, updateAccount, a
   }, [initialEditAccount]);
 
   function openEdit(a) {
+    setExpandedId(a.id);
     setEditingId(a.id);
     setEditForm({ name: a.name || "", initial: String(a.initial || 0), cardNumber: String(a.cardNumber || ""), expiryDate: expiryFromStored(a.expiryDate) });
   }
   function saveEdit(a) {
     if (!editForm.name.trim()) return;
-    const cleanCard = editForm.cardNumber.replace(/\\D/g, "").slice(0, 16);
+    const cleanCard = editForm.cardNumber.replace(/\D/g, "").slice(0, 16);
     updateAccount?.(a.id, {
       name: editForm.name.trim(),
       initial: Number(editForm.initial || 0),
@@ -4033,7 +4089,7 @@ function AccountsManager({ accounts, addAccount, deleteAccount, updateAccount, a
   }
   function add() {
     if (!name.trim()) return;
-    const cleanCard = cardNumber.replace(/\\D/g, "").slice(0, 16);
+    const cleanCard = cardNumber.replace(/\D/g, "").slice(0, 16);
     addAccount({ name: name.trim(), type, initial: Number(initial || 0), cardNumber: cleanCard || undefined, cardNumberLast4: cleanCard ? cleanCard.slice(-4) : undefined, expiryDate: expiryDate.trim() || undefined });
     setName(""); setInitial(""); setCardNumber(""); setExpiryDate("");
   }
@@ -4056,8 +4112,8 @@ function AccountsManager({ accounts, addAccount, deleteAccount, updateAccount, a
     </div>
     <div style={{ ...st.card, padding: "4px 12px" }}>
       {accounts.filter((a) => filterType === "all" || a.type === filterType).length === 0 && <EmptyRow text="حسابی ثبت نشده" />}
-      {accounts.filter((a) => filterType === "all" || a.type === filterType).map((a) => <div key={a.id}>
-        <Row title={a.name} subtitle={`${a.type === "bank" ? "بانک" : a.type === "card" ? "کارت" : "صندوق"} · موجودی: ${toFaInt(accountBalance(a.id))} ریال`}
+      {accounts.filter((a) => filterType === "all" || a.type === filterType).sort((x, y) => Number(!!x.archived) - Number(!!y.archived)).map((a) => <div key={a.id} data-rec={a.id} style={{ opacity: a.archived ? 0.55 : 1 }}>
+        <Row title={a.archived ? `${a.name} (بایگانی‌شده)` : a.name} subtitle={`${a.type === "bank" ? "بانک" : a.type === "card" ? "کارت" : "صندوق"} · موجودی: ${toFaInt(accountBalance(a.id))} ریال`}
           extra={<div style={{ display: "flex", gap: 4 }}>
             <button onClick={(e) => { e.stopPropagation(); openEdit(a); }} style={{ ...miniBtn, color: BRAND.violet }} title="ویرایش حساب"><Pencil size={13} /></button>
             <button onClick={(e) => { e.stopPropagation(); toggleFavorite("accounts", a.id); }} style={{ background: "none", border: "none", cursor: "pointer" }}><Star size={16} fill={favorites.accounts.includes(a.id) ? "#f5b301" : "none"} color="#f5b301" /></button>
@@ -4067,11 +4123,18 @@ function AccountsManager({ accounts, addAccount, deleteAccount, updateAccount, a
           <div><b>نوع حساب:</b> {a.type === "bank" ? "بانک" : a.type === "card" ? "کارت" : "صندوق"}</div>
           <div><b>موجودی فعلی:</b> {toFaInt(accountBalance(a.id))} ریال</div>
           <div><b>موجودی اولیه:</b> {toFaInt(a.initial || 0)} ریال</div>
-          {a.cardNumberLast4 && <div><b>چهار رقم آخر کارت:</b> {a.cardNumberLast4}</div>}
+          {(a.cardNumber || a.cardNumberLast4) && <div><b>شماره کارت:</b> <span dir="ltr" style={{ unicodeBidi: "embed" }}>{a.cardNumber ? fmtCard(a.cardNumber) : `•••• •••• •••• ${a.cardNumberLast4}`}</span></div>}
           {a.expiryDate && <div><b>تاریخ انقضا:</b> {a.expiryDate}</div>}
-          <div style={{display:"flex",gap:6,marginTop:8}}>
+          {(() => { const list = transactions.filter((x) => x.accountId === a.id || x.toAccountId === a.id).sort((x, y) => `${y.date || ""}${y.time || ""}`.localeCompare(`${x.date || ""}${x.time || ""}`)).slice(0, 8); return list.length ? <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px solid #e7e0eb" }}><b>آخرین تراکنش‌ها:</b>{list.map((x) => <div key={x.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 11.5 }}><span>{jf(x.date)} · {x.note || (x.type === "expense" ? "هزینه" : x.type === "income" ? "درآمد" : "تراکنش")}</span><span style={{ color: (x.type === "income" || x.type === "loanReceipt" || x.toAccountId === a.id) ? BRAND.darkgreen : BRAND.crimson }}>{toFaInt(x.amount)}</span></div>)}</div> : null; })()}
+          {a.archived && <div style={{color:BRAND.orange}}>این حساب بایگانی شده و در انتخاب حساب‌ها نمایش داده نمی‌شود.</div>}
+          <div style={{display:"flex",gap:6,marginTop:8,flexWrap:"wrap"}}>
             <button onClick={(e)=>{e.stopPropagation();openEdit(a)}} style={{...st.primaryBtn,margin:0,padding:"7px 12px",fontSize:11.5}}>ویرایش</button>
-            <button onClick={(e)=>{e.stopPropagation();if(window.confirm("این حساب حذف شود؟")) deleteAccount(a.id)}} style={{...st.primaryBtn,margin:0,padding:"7px 12px",fontSize:11.5,background:BRAND.crimson}}>حذف / بایگانی</button>
+            {a.archived
+              ? <button onClick={(e)=>{e.stopPropagation();updateAccount(a.id,{archived:false})}} style={{...st.primaryBtn,margin:0,padding:"7px 12px",fontSize:11.5,background:BRAND.green}}>بازگردانی</button>
+              : <button onClick={(e)=>{e.stopPropagation();const bal=accountBalance(a.id);if(window.confirm(bal?`موجودی این حساب ${toFaInt(bal)} ریال است. بایگانی شود؟ (تراکنش‌ها حفظ می‌شوند)`:"این حساب بایگانی شود؟ (تراکنش‌ها حفظ می‌شوند)")) updateAccount(a.id,{archived:true})}} style={{...st.primaryBtn,margin:0,padding:"7px 12px",fontSize:11.5,background:BRAND.orange}}>بایگانی</button>}
+            {!accountInUse(a)
+              ? <button onClick={(e)=>{e.stopPropagation();if(window.confirm("این حساب برای همیشه حذف شود؟")) deleteAccount(a.id)}} style={{...st.primaryBtn,margin:0,padding:"7px 12px",fontSize:11.5,background:BRAND.crimson}}>حذف</button>
+              : <span style={{fontSize:11,color:"#8a8194",alignSelf:"center"}}>به‌دلیل داشتن تراکنش/وام فقط بایگانی می‌شود</span>}
           </div>
         </div>}
         {editingId === a.id && <div style={{ background: "#f7f4fa", borderRadius: 12, padding: 10, margin: "2px 0 10px" }}>
@@ -4223,6 +4286,7 @@ function RecurringManager({ recurring, setRecurring, categories, accounts, focus
   const [form, setForm] = useState({ type: "expense", amount: "", categoryId: "", accountId: accounts[0]?.id || "", interval: "monthly", startDate: todayISO(), note: "" });
   const [expandedId, setExpandedId] = useState(null);
   useEffect(() => { if (focusId && recurring.some((r) => r.id === focusId)) setExpandedId(focusId); }, [focusId, recurring]);
+  useFocusScroll(focusId);
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState(null);
   const cats = categories.filter(c => c.kind === form.type);
@@ -4254,7 +4318,7 @@ function RecurringManager({ recurring, setRecurring, categories, accounts, focus
     </div>
     <div style={{ ...st.card, padding: "4px 12px" }}>
       {!recurring.length && <EmptyRow text="موردی ثبت نشده" />}
-      {recurring.map(r => { const expanded = expandedId === r.id; const c = categories.find(x => x.id === r.categoryId); return <div key={r.id} style={{ borderBottom: "1px solid #f0eef3" }}>
+      {recurring.map(r => { const expanded = expandedId === r.id; const c = categories.find(x => x.id === r.categoryId); return <div key={r.id} data-rec={r.id} style={{ borderBottom: "1px solid #f0eef3" }}>
         <Row title={c?.name || "—"} subtitle={`${r.interval === "monthly" ? "ماهانه" : "هفتگی"} · بعدی: ${faLongDate(new Date(r.nextDate))}`} value={`${toFaInt(r.amount)} ریال`} leftIcon={expanded ? <ChevronDown size={16}/> : <Eye size={16}/>} leftColor={r.type === "expense" ? BRAND.crimson : BRAND.green} onClick={() => { setExpandedId(x => x === r.id ? null : r.id); setEditingId(null); }} chevron={null} extra={<div style={{display:"flex",gap:4}}><button onClick={e=>{e.stopPropagation();beginEdit(r)}} style={{...miniBtn,color:BRAND.violet}}><Pencil size={14}/></button><button onClick={e=>{e.stopPropagation();setRecurring(p=>p.map(x=>x.id===r.id?{...x,active:!x.active}:x))}} style={{...miniBtn,color:r.active?BRAND.green:"#aaa"}}>{r.active?"فعال":"خاموش"}</button><button onClick={e=>{e.stopPropagation();if(window.confirm("این مورد حذف شود؟"))setRecurring(p=>p.filter(x=>x.id!==r.id))}} style={{...miniBtn,color:BRAND.crimson}}><Trash2 size={14}/></button></div>} />
         {expanded && <div style={{background:"#f8f5fa",borderRadius:12,padding:12,margin:"0 0 10px",fontSize:12,lineHeight:1.9}}><div><b>نوع:</b> {r.type === "expense" ? "هزینه" : "درآمد"}</div><div><b>حساب:</b> {accounts.find(a=>a.id===r.accountId)?.name || "—"}</div><div><b>تاریخ بعدی:</b> {faLongDate(new Date(r.nextDate))}</div><div><b>وضعیت:</b> {r.active ? "فعال" : "غیرفعال"}</div>{r.note && <div><b>یادداشت:</b> {r.note}</div>}
           {editingId === r.id && editForm && <div style={{marginTop:10,paddingTop:10,borderTop:"1px solid #e7e0eb"}}><AmountInput value={editForm.amount} onChange={v=>setEditForm(f=>({...f,amount:v}))} placeholder="مبلغ" style={{...st.input,marginBottom:7}}/><select value={editForm.categoryId} onChange={e=>setEditForm(f=>({...f,categoryId:e.target.value}))} style={{...st.input,marginBottom:7}}>{categories.filter(c=>c.kind===editForm.type).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select><select value={editForm.accountId} onChange={e=>setEditForm(f=>({...f,accountId:e.target.value}))} style={{...st.input,marginBottom:7}}>{accounts.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select><input value={editForm.note||""} onChange={e=>setEditForm(f=>({...f,note:e.target.value}))} style={{...st.input,marginBottom:7}} placeholder="یادداشت"/><div style={{display:"flex",gap:7}}><button onClick={()=>saveEdit(r)} style={{...st.primaryBtn,flex:1}}>ذخیره</button><button onClick={()=>{setEditingId(null);setEditForm(null)}} style={{...st.primaryBtn,flex:.6,background:"#eee",color:"#444"}}>انصراف</button></div></div>}
@@ -4275,6 +4339,7 @@ function ChecksManager({ checks, setChecks, focusId = null }) {
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState(null);
   useEffect(() => { if (focusId && checks.some((c) => c.id === focusId)) setExpandedId(focusId); }, [focusId, checks]);
+  useFocusScroll(focusId);
   function add() {
     if (!form.payee || !form.amount || !form.checkNumber || form.sayadId.length < 16 || form.sayadId.length > 20) return;
     setChecks(p => [{ id: uid(), ...form, amount: Number(form.amount), status: "pending" }, ...p]);
@@ -4287,10 +4352,10 @@ function ChecksManager({ checks, setChecks, focusId = null }) {
   function saveEdit(c){ if(!editForm?.payee || !editForm?.amount) return; setChecks(p=>p.map(x=>x.id===c.id?{...x,...editForm,amount:Number(editForm.amount)}:x)); setEditingId(null);setEditForm(null); }
   return <div>
     <div style={{...st.card,padding:14,marginBottom:16}}><div style={{fontWeight:700,marginBottom:10,fontSize:14}}>ثبت چک جدید</div><div style={{display:"flex",gap:8,marginBottom:10}}><button onClick={()=>setForm({...form,type:"received"})} style={pillStyle(form.type==="received")}>دریافتی</button><button onClick={()=>setForm({...form,type:"paid"})} style={pillStyle(form.type==="paid")}>پرداختی</button></div><input placeholder="نام طرف حساب" value={form.payee} onChange={e=>setForm({...form,payee:e.target.value})} style={st.input}/><AmountInput placeholder="مبلغ" value={form.amount} onChange={v=>setForm({...form,amount:v})} style={st.input}/><KeypadInput kind="digits" digitsMax={20} placeholder="شناسه صیادی" value={form.sayadId} onChange={e=>setForm({...form,sayadId:e.target.value.replace(/[^0-9]/g,"").slice(0,20)})} style={st.input}/><input placeholder="شماره چک" value={form.checkNumber} onChange={e=>setForm({...form,checkNumber:e.target.value})} style={st.input}/><label style={st.label}>تاریخ سررسید</label><JalaliDateInput value={form.dueDate} onChange={v=>setForm({...form,dueDate:v})} style={st.input}/><input placeholder="یادداشت" value={form.note} onChange={e=>setForm({...form,note:e.target.value})} style={st.input}/><button onClick={add} disabled={!form.payee||!form.amount||!form.checkNumber||form.sayadId.length<16} style={{...st.primaryBtn,opacity:(!form.payee||!form.amount||!form.checkNumber||form.sayadId.length<16)?.5:1}}>ثبت چک</button></div>
-    <div style={{...st.card,padding:"4px 12px"}}>{!sorted.length&&<EmptyRow text="چکی ثبت نشده"/>}{sorted.map(c=>{const expanded=expandedId===c.id;return <div key={c.id} style={{borderBottom:"1px solid #f0eef3"}}><Row title={`${c.payee} · ${c.type==="received"?"دریافتی":"پرداختی"}`} subtitle={`سررسید: ${faLongDate(new Date(c.dueDate))}`} value={`${toFaInt(c.amount)} ریال`} valueColor={c.type==="received"?BRAND.darkgreen:BRAND.crimson} leftIcon={expanded?<ChevronDown size={16}/>:<Eye size={16}/>} leftColor={statusColor[c.status]||BRAND.gold} onClick={()=>{setExpandedId(x=>x===c.id?null:c.id);setEditingId(null)}} chevron={null} extra={<div style={{display:"flex",gap:4,alignItems:"center"}}><StatusBadge text={statusLabel[c.status]||c.status} color={statusColor[c.status]||BRAND.gold}/><button onClick={e=>{e.stopPropagation();beginEdit(c)}} style={{...miniBtn,color:BRAND.violet}}><Pencil size={14}/></button><button onClick={e=>{e.stopPropagation();if(window.confirm("این چک حذف شود؟"))setChecks(p=>p.filter(x=>x.id!==c.id))}} style={{...miniBtn,color:BRAND.crimson}}><Trash2 size={14}/></button></div>} />
+    <div style={{...st.card,padding:"4px 12px"}}>{!sorted.length&&<EmptyRow text="چکی ثبت نشده"/>}{sorted.map(c=>{const expanded=expandedId===c.id;return <div key={c.id} data-rec={c.id} style={{borderBottom:"1px solid #f0eef3"}}><Row title={`${c.payee} · ${c.type==="received"?"دریافتی":"پرداختی"}`} subtitle={`سررسید: ${faLongDate(new Date(c.dueDate))}`} value={`${toFaInt(c.amount)} ریال`} valueColor={c.type==="received"?BRAND.darkgreen:BRAND.crimson} leftIcon={expanded?<ChevronDown size={16}/>:<Eye size={16}/>} leftColor={statusColor[c.status]||BRAND.gold} onClick={()=>{setExpandedId(x=>x===c.id?null:c.id);setEditingId(null)}} chevron={null} extra={<div style={{display:"flex",gap:4,alignItems:"center"}}><StatusBadge text={statusLabel[c.status]||c.status} color={statusColor[c.status]||BRAND.gold}/><button onClick={e=>{e.stopPropagation();beginEdit(c)}} style={{...miniBtn,color:BRAND.violet}}><Pencil size={14}/></button><button onClick={e=>{e.stopPropagation();if(window.confirm("این چک حذف شود؟"))setChecks(p=>p.filter(x=>x.id!==c.id))}} style={{...miniBtn,color:BRAND.crimson}}><Trash2 size={14}/></button></div>} />
       {expanded&&<div style={{background:"#f8f5fa",borderRadius:12,padding:12,margin:"0 0 10px",fontSize:12,lineHeight:1.9}}><div><b>نوع:</b> {c.type==="received"?"دریافتی":"پرداختی"}</div><div><b>طرف حساب:</b> {c.payee}</div><div><b>مبلغ:</b> {toFaInt(c.amount)} ریال</div><div><b>شناسه صیادی:</b> {c.sayadId||"—"}</div><div><b>شماره چک:</b> {c.checkNumber||"—"}</div><div><b>وضعیت:</b> {statusLabel[c.status]||c.status}</div>{c.note&&<div><b>یادداشت:</b> {c.note}</div>}
         <div style={{marginTop:9}}><select value={c.status||"pending"} onChange={e=>setChecks(p=>p.map(x=>x.id===c.id?{...x,status:e.target.value,settledAt:(e.target.value==="cashed"||e.target.value==="paid")?todayISO():x.settledAt}:x))} style={{...st.input,marginBottom:7}}><option value="pending">در انتظار</option><option value={c.type==="received"?"cashed":"paid"}>{c.type==="received"?"وصول شده":"پرداخت شده"}</option><option value="bounced">برگشتی</option></select></div>
-        {editingId===c.id&&editForm&&<div style={{marginTop:8,paddingTop:9,borderTop:"1px solid #e7e0eb"}}><input value={editForm.payee} onChange={e=>setEditForm(f=>({...f,payee:e.target.value}))} style={{...st.input,marginBottom:7}} placeholder="طرف حساب"/><AmountInput value={editForm.amount} onChange={v=>setEditForm(f=>({...f,amount:v}))} style={{...st.input,marginBottom:7}}/><JalaliDateInput value={editForm.dueDate} onChange={v=>setEditForm(f=>({...f,dueDate:v}))} style={{...st.input,marginBottom:7}}/><input value={editForm.note||""} onChange={e=>setEditForm(f=>({...f,note:e.target.value}))} style={{...st.input,marginBottom:7}} placeholder="یادداشت"/><div style={{display:"flex",gap:7}}><button onClick={()=>saveEdit(c)} style={{...st.primaryBtn,flex:1}}>ذخیره</button><button onClick={()=>{setEditingId(null);setEditForm(null)}} style={{...st.primaryBtn,flex:.6,background:"#eee",color:"#444"}}>انصراف</button></div></div>}
+        {editingId===c.id&&editForm&&<div style={{marginTop:8,paddingTop:9,borderTop:"1px solid #e7e0eb"}}><input value={editForm.payee} onChange={e=>setEditForm(f=>({...f,payee:e.target.value}))} style={{...st.input,marginBottom:7}} placeholder="طرف حساب"/><input value={editForm.checkNumber||""} onChange={e=>setEditForm(f=>({...f,checkNumber:e.target.value}))} style={{...st.input,marginBottom:7}} placeholder="شماره چک"/><AmountInput value={editForm.amount} onChange={v=>setEditForm(f=>({...f,amount:v}))} style={{...st.input,marginBottom:7}}/><JalaliDateInput value={editForm.dueDate} onChange={v=>setEditForm(f=>({...f,dueDate:v}))} style={{...st.input,marginBottom:7}}/><input value={editForm.note||""} onChange={e=>setEditForm(f=>({...f,note:e.target.value}))} style={{...st.input,marginBottom:7}} placeholder="یادداشت"/><div style={{display:"flex",gap:7}}><button onClick={()=>saveEdit(c)} style={{...st.primaryBtn,flex:1}}>ذخیره</button><button onClick={()=>{setEditingId(null);setEditForm(null)}} style={{...st.primaryBtn,flex:.6,background:"#eee",color:"#444"}}>انصراف</button></div></div>}
         </div>}
     </div>})}</div>
   </div>;
@@ -4305,6 +4370,7 @@ function LoansManager({ loans, setLoans, categories = [], transactions = [], add
   const [form, setForm] = useState({ title: "", principal: "", installments: "", monthlyPayment: "", startDate: todayISO(), spent: false, accountId: "" });
   const [expandedId, setExpandedId] = useState(null);
   useEffect(() => { if (focusId && loans.some((l) => l.id === focusId)) setExpandedId(focusId); }, [focusId, loans]);
+  useFocusScroll(focusId);
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState(null);
   const [accountOpen, setAccountOpen] = useState(false);
@@ -4340,6 +4406,7 @@ function LoansManager({ loans, setLoans, categories = [], transactions = [], add
   }
 
   function openEdit(l) {
+    setExpandedId(l.id);
     setEditingId(l.id);
     setEditForm({ title: l.title || "", principal: String(l.principal || ""), installments: String(l.installments || ""), monthlyPayment: String(l.monthlyPayment || ""), startDate: l.startDate || todayISO(), spent: !!l.spent, accountId: l.accountId || "" });
   }
@@ -4439,12 +4506,12 @@ function LoansManager({ loans, setLoans, categories = [], transactions = [], add
           const remaining = Math.max(0, Number(l.principal || 0) - Number(l.paidCount || 0) * principalPerInstallment);
           const nextDue = addMonths(l.startDate, l.paidCount);
           return (
-            <div key={l.id} style={{ padding: "12px 4px", borderBottom: "1px solid #f0eef3", cursor: "pointer" }} onClick={() => setExpandedId(x => x === l.id ? null : l.id)}>
+            <div key={l.id} data-rec={l.id} style={{ padding: "12px 4px", borderBottom: "1px solid #f0eef3", cursor: "pointer" }} onClick={() => { setExpandedId(x => x === l.id ? null : l.id); if (editingId && editingId !== l.id) { setEditingId(null); setEditForm(null); } }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
                 <span style={{ fontWeight: 700, fontSize: 14 }}>{l.title}{l.spent && <span style={{ marginRight: 8, fontSize: 10.5, fontWeight: 700, padding: "2px 8px", borderRadius: 10, background: "#f1eef4", color: "#6b6377" }}>خرج‌شده</span>}</span>
                 <div style={{ display: "flex", gap: 2 }}>
-                  <button onClick={() => openEdit(l)} title="ویرایش وام و اقساط" style={{ background: "none", border: "none", color: BRAND.violet, cursor: "pointer" }}><Pencil size={15} /></button>
-                  <button onClick={() => { if (window.confirm("این وام حذف شود؟ تراکنش‌های مرتبط آن هم حذف می‌شوند.")) { transactions.filter(x => x.loanId === l.id || x.sourceId === l.id || String(x.sourceId || "").startsWith(`${l.id}:`)).forEach(x => deleteTransaction?.(x.id)); setLoans((p) => p.filter((x) => x.id !== l.id)); } }} title="حذف وام" style={{ background: "none", border: "none", color: BRAND.crimson, cursor: "pointer" }}><Trash2 size={15} /></button>
+                  <button onClick={(e) => { e.stopPropagation(); openEdit(l); }} title="ویرایش وام و اقساط" style={{ background: "none", border: "none", color: BRAND.violet, cursor: "pointer" }}><Pencil size={15} /></button>
+                  <button onClick={(e) => { e.stopPropagation(); if (window.confirm("این وام حذف شود؟ تراکنش‌های مرتبط آن هم حذف می‌شوند.")) { transactions.filter(x => x.loanId === l.id || x.sourceId === l.id || String(x.sourceId || "").startsWith(`${l.id}:`)).forEach(x => deleteTransaction?.(x.id)); setLoans((p) => p.filter((x) => x.id !== l.id)); } }} title="حذف وام" style={{ background: "none", border: "none", color: BRAND.crimson, cursor: "pointer" }}><Trash2 size={15} /></button>
                 </div>
               </div>
               <div style={{ fontSize: 11.5, color: t.sub, marginBottom: 4 }}>از حساب: {accountName(l.accountId)}</div>
@@ -4452,21 +4519,24 @@ function LoansManager({ loans, setLoans, categories = [], transactions = [], add
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                 <span style={{ fontWeight: 700, color: remaining > 0 ? BRAND.crimson : BRAND.darkgreen }}>باقی‌مانده: {toFaInt(Math.max(remaining, 0))} ریال</span>
                 <div style={{ display: "flex", gap: 6 }}>
-                  {l.paidCount > 0 && <button onClick={() => undoLastPayment(l)} style={{ background: "#f1eef4", color: "#5f566b", border: "none", borderRadius: 8, padding: "6px 10px", fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}>اصلاح آخرین قسط</button>}
-                  {l.paidCount < l.installments && <button onClick={() => payLoan(l)} style={{ background: BRAND.green, color: "#fff", border: "none", borderRadius: 8, padding: "6px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>ثبت پرداخت قسط</button>}
+                  {l.paidCount > 0 && <button onClick={(e) => { e.stopPropagation(); undoLastPayment(l); }} style={{ background: "#f1eef4", color: "#5f566b", border: "none", borderRadius: 8, padding: "6px 10px", fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}>اصلاح آخرین قسط</button>}
+                  {l.paidCount < l.installments && <button onClick={(e) => { e.stopPropagation(); if (window.confirm(`قسط ${toFaInt(Number(l.paidCount || 0) + 1)} وام «${l.title}» به مبلغ ${toFaInt(l.monthlyPayment)} ریال از حساب ${accountName(l.accountId)} پرداخت شود؟`)) payLoan(l); }} style={{ background: BRAND.green, color: "#fff", border: "none", borderRadius: 8, padding: "6px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>ثبت پرداخت قسط</button>}
                 </div>
               </div>
-              {expandedId === l.id && editingId !== l.id && <div style={{ background: "#f8f5fa", borderRadius: 12, padding: 10, marginTop: 10, fontSize: 12, lineHeight: 1.9 }}>
+              {expandedId === l.id && editingId !== l.id && <div onClick={(e) => e.stopPropagation()} style={{ background: "#f8f5fa", borderRadius: 12, padding: 10, marginTop: 10, fontSize: 12, lineHeight: 1.9, cursor: "default" }}>
                 <div><b>اصل وام:</b> {toFaInt(l.principal)} ریال</div>
                 <div><b>مبلغ هر قسط:</b> {toFaInt(l.monthlyPayment)} ریال</div>
                 <div><b>تعداد اقساط:</b> {toFaInt(l.installments)}</div>
                 <div><b>پرداخت‌شده:</b> {toFaInt(l.paidCount || 0)} قسط</div>
                 <div><b>اصل باقی‌مانده:</b> {toFaInt(remaining)} ریال</div>
                 <div><b>هزینه مالی کل:</b> {toFaInt(totalInterest)} ریال</div>
+                <div><b>تاریخ شروع:</b> {l.startDate ? jf(l.startDate) : "—"}</div>
+                {(() => { const list = transactions.filter((x) => x.loanId === l.id).sort((x, y) => `${y.date || ""}${y.time || ""}`.localeCompare(`${x.date || ""}${x.time || ""}`)); return list.length ? <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px solid #e7e0eb" }}><b>تراکنش‌های وام:</b>{list.map((x) => <div key={x.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 11.5 }}><span>{jf(x.date)} · {x.note}</span><span style={{ color: x.type === "loanReceipt" ? BRAND.darkgreen : BRAND.crimson }}>{toFaInt(x.amount)}</span></div>)}</div> : null; })()}
+                {l.paidCount > 0 && <div style={{ color: BRAND.orange }}>پس از ثبت قسط، اصل وام، تعداد و مبلغ اقساط و حساب قابل تغییر نیست؛ برای اصلاح، ابتدا «اصلاح آخرین قسط» را بزنید.</div>}
                 <div><b>حساب:</b> {accountName(l.accountId)}</div>
                 <button onClick={(e) => { e.stopPropagation(); openEdit(l); }} style={{ ...st.primaryBtn, marginTop: 8, padding: "7px 12px", fontSize: 11.5 }}>ویرایش وام</button>
               </div>}
-              {editingId === l.id && editForm && <div style={{ background: "#f7f4fa", borderRadius: 12, padding: 10, marginTop: 10 }}>
+              {editingId === l.id && editForm && <div onClick={(e) => e.stopPropagation()} style={{ background: "#f7f4fa", borderRadius: 12, padding: 10, marginTop: 10, cursor: "default" }}>
                 <div style={{ fontWeight: 800, fontSize: 13, marginBottom: 8 }}>ویرایش وام / اقساط</div>
                 <input value={editForm.title} onChange={(e) => setEditForm({ ...editForm, title: e.target.value })} placeholder="عنوان وام" style={{ ...st.input, marginBottom: 7 }} />
                 {accountField(editForm.accountId, setEditAccountOpen)}
@@ -4496,13 +4566,14 @@ function BillsManager({ bills, setBills, focusId = null }) {
   const st = useStyles();
   const [form, setForm] = useState({ title: "آب", amount: "", dueDate: todayISO(), recurringMonthly: true });
   useEffect(() => { if (focusId && bills.some((b) => b.id === focusId)) setExpandedId(focusId); }, [focusId, bills]);
+  useFocusScroll(focusId);
   const [expandedId, setExpandedId] = useState(null); const [editingId, setEditingId] = useState(null); const [editForm, setEditForm] = useState(null);
   function add(){ if(!form.amount) return; setBills(p=>[...p,{id:uid(),...form,amount:Number(form.amount),paid:false}]);setForm(f=>({...f,amount:""})); }
   function beginEdit(b){setExpandedId(b.id);setEditingId(b.id);setEditForm({...b,amount:String(b.amount||"")});}
   function saveEdit(b){if(!editForm?.amount)return;setBills(p=>p.map(x=>x.id===b.id?{...x,...editForm,amount:Number(editForm.amount)}:x));setEditingId(null);setEditForm(null);}
   function markPaid(b){setBills(prev=>prev.map(x=>x.id===b.id?(x.recurringMonthly?{...x,dueDate:addMonths(x.dueDate,1),paid:false,lastPaidAt:todayISO() }:{...x,paid:true,lastPaidAt:todayISO()}):x));}
   return <div><div style={{...st.card,padding:14,marginBottom:16}}><div style={{fontWeight:700,marginBottom:10}}>افزودن قبض</div><div style={{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap"}}>{BILL_CATS.map(c=><button key={c} onClick={()=>setForm({...form,title:c})} style={{...pillStyle(form.title===c),flex:"none",padding:"7px 12px"}}>{c}</button>)}</div><AmountInput placeholder="مبلغ" value={form.amount} onChange={v=>setForm({...form,amount:v})} style={st.input}/><JalaliDateInput value={form.dueDate} onChange={v=>setForm({...form,dueDate:v})} style={st.input}/><label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,marginBottom:12}}><input type="checkbox" checked={form.recurringMonthly} onChange={e=>setForm({...form,recurringMonthly:e.target.checked})}/> یادآوری ماهانه</label><button onClick={add} style={st.primaryBtn}>افزودن قبض</button></div>
-  <div style={{...st.card,padding:"4px 12px"}}>{!bills.length&&<EmptyRow text="قبضی ثبت نشده"/>}{[...bills].sort((a,b)=>String(a.dueDate).localeCompare(String(b.dueDate))).map(b=>{const d=daysUntil(b.dueDate);const expanded=expandedId===b.id;return <div key={b.id} style={{borderBottom:"1px solid #f0eef3"}}><Row title={b.title} subtitle={`${faLongDate(new Date(b.dueDate))} · ${b.paid?"پرداخت شده":d<0?"سررسید گذشته":`${toFaInt(d)} روز مانده`}`} value={b.amount?`${toFaInt(b.amount)} ریال`:"—"} leftIcon={expanded?<ChevronDown size={16}/>:<Eye size={16}/>} leftColor={b.paid?BRAND.darkgreen:BRAND.orange} onClick={()=>{setExpandedId(x=>x===b.id?null:b.id);setEditingId(null)}} chevron={null} extra={<div style={{display:"flex",gap:4}}>{!b.paid&&<button onClick={e=>{e.stopPropagation();markPaid(b)}} style={{...miniBtn,color:BRAND.green}}><Check size={14}/></button>}<button onClick={e=>{e.stopPropagation();beginEdit(b)}} style={{...miniBtn,color:BRAND.violet}}><Pencil size={14}/></button><button onClick={e=>{e.stopPropagation();if(window.confirm("این قبض حذف شود؟"))setBills(p=>p.filter(x=>x.id!==b.id))}} style={{...miniBtn,color:BRAND.crimson}}><Trash2 size={14}/></button></div>} />{expanded&&<div style={{background:"#f8f5fa",borderRadius:12,padding:12,margin:"0 0 10px",fontSize:12,lineHeight:1.9}}><div><b>عنوان:</b> {b.title}</div><div><b>مبلغ:</b> {toFaInt(b.amount)} ریال</div><div><b>سررسید:</b> {faLongDate(new Date(b.dueDate))}</div><div><b>وضعیت:</b> {b.paid?"پرداخت شده":"پرداخت نشده"}</div>{b.lastPaidAt&&<div><b>آخرین پرداخت:</b> {jf(b.lastPaidAt)}</div>}{editingId===b.id&&editForm&&<div style={{marginTop:9}}><AmountInput value={editForm.amount} onChange={v=>setEditForm(f=>({...f,amount:v}))} style={{...st.input,marginBottom:7}}/><JalaliDateInput value={editForm.dueDate} onChange={v=>setEditForm(f=>({...f,dueDate:v}))} style={{...st.input,marginBottom:7}}/><div style={{display:"flex",gap:7}}><button onClick={()=>saveEdit(b)} style={{...st.primaryBtn,flex:1}}>ذخیره</button><button onClick={()=>{setEditingId(null);setEditForm(null)}} style={{...st.primaryBtn,flex:.6,background:"#eee",color:"#444"}}>انصراف</button></div></div>}{editingId!==b.id&&<button onClick={()=>beginEdit(b)} style={{...st.primaryBtn,marginTop:8,padding:"7px 12px",fontSize:11.5}}>ویرایش</button>}</div>}</div>})}</div></div>;
+  <div style={{...st.card,padding:"4px 12px"}}>{!bills.length&&<EmptyRow text="قبضی ثبت نشده"/>}{[...bills].sort((a,b)=>String(a.dueDate).localeCompare(String(b.dueDate))).map(b=>{const d=daysUntil(b.dueDate);const expanded=expandedId===b.id;return <div key={b.id} data-rec={b.id} style={{borderBottom:"1px solid #f0eef3"}}><Row title={b.title} subtitle={`${faLongDate(new Date(b.dueDate))} · ${b.paid?"پرداخت شده":d<0?"سررسید گذشته":`${toFaInt(d)} روز مانده`}`} value={b.amount?`${toFaInt(b.amount)} ریال`:"—"} leftIcon={expanded?<ChevronDown size={16}/>:<Eye size={16}/>} leftColor={b.paid?BRAND.darkgreen:BRAND.orange} onClick={()=>{setExpandedId(x=>x===b.id?null:b.id);setEditingId(null)}} chevron={null} extra={<div style={{display:"flex",gap:4}}>{!b.paid&&<button onClick={e=>{e.stopPropagation();markPaid(b)}} style={{...miniBtn,color:BRAND.green}}><Check size={14}/></button>}<button onClick={e=>{e.stopPropagation();beginEdit(b)}} style={{...miniBtn,color:BRAND.violet}}><Pencil size={14}/></button><button onClick={e=>{e.stopPropagation();if(window.confirm("این قبض حذف شود؟"))setBills(p=>p.filter(x=>x.id!==b.id))}} style={{...miniBtn,color:BRAND.crimson}}><Trash2 size={14}/></button></div>} />{expanded&&<div style={{background:"#f8f5fa",borderRadius:12,padding:12,margin:"0 0 10px",fontSize:12,lineHeight:1.9}}><div><b>عنوان:</b> {b.title}</div><div><b>مبلغ:</b> {toFaInt(b.amount)} ریال</div><div><b>سررسید:</b> {faLongDate(new Date(b.dueDate))}</div><div><b>وضعیت:</b> {b.paid?"پرداخت شده":"پرداخت نشده"}</div>{b.lastPaidAt&&<div><b>آخرین پرداخت:</b> {jf(b.lastPaidAt)}</div>}{editingId===b.id&&editForm&&<div style={{marginTop:9}}><AmountInput value={editForm.amount} onChange={v=>setEditForm(f=>({...f,amount:v}))} style={{...st.input,marginBottom:7}}/><JalaliDateInput value={editForm.dueDate} onChange={v=>setEditForm(f=>({...f,dueDate:v}))} style={{...st.input,marginBottom:7}}/><div style={{display:"flex",gap:7}}><button onClick={()=>saveEdit(b)} style={{...st.primaryBtn,flex:1}}>ذخیره</button><button onClick={()=>{setEditingId(null);setEditForm(null)}} style={{...st.primaryBtn,flex:.6,background:"#eee",color:"#444"}}>انصراف</button></div></div>}{editingId!==b.id&&<button onClick={()=>beginEdit(b)} style={{...st.primaryBtn,marginTop:8,padding:"7px 12px",fontSize:11.5}}>ویرایش</button>}</div>}</div>})}</div></div>;
 }
 
 /* ---------------------------------------------------------
@@ -4517,6 +4588,17 @@ function AssetPriceEdit({ asset, setAssets, st }) {
 function AssetsManager({ assets, setAssets, focusId = null }) {
   const [refreshing, setRefreshing] = useState(false);
   const st = useStyles();
+  const [expandedId, setExpandedId] = useState(null);
+  const [editingId, setEditingId] = useState(null);
+  const [editForm, setEditForm] = useState(null);
+  useEffect(() => { if (focusId && assets.some((x) => x.id === focusId)) setExpandedId(focusId); }, [focusId, assets]);
+  useFocusScroll(focusId);
+  function beginEdit(a) { setExpandedId(a.id); setEditingId(a.id); setEditForm({ kind: a.kind || "crypto", symbol: a.symbol || "", quantity: String(a.quantity ?? ""), avgPrice: String(a.avgPrice ?? ""), currentPrice: String(a.currentPrice ?? "") }); }
+  function saveEdit(a) {
+    if (!editForm?.symbol?.trim() || !Number(editForm.quantity)) return;
+    setAssets((p) => p.map((x) => x.id === a.id ? { ...x, kind: editForm.kind, symbol: editForm.symbol.trim(), quantity: Number(editForm.quantity), avgPrice: Number(editForm.avgPrice || 0), currentPrice: Number(editForm.currentPrice || editForm.avgPrice || 0) } : x));
+    setEditingId(null); setEditForm(null);
+  }
   const [form, setForm] = useState({ kind: "crypto", symbol: "", quantity: "", avgPrice: "", currentPrice: "" });
   const total = assets.reduce((s, a) => s + a.quantity * a.currentPrice, 0);
   function add() {
@@ -4558,18 +4640,42 @@ function AssetsManager({ assets, setAssets, focusId = null }) {
       <SectionTitle text={`ارزش کل: ${toFaInt(total)} ریال`} />
       <div style={{ ...st.card, padding: "4px 12px" }}>
         {assets.length === 0 && <EmptyRow text="دارایی‌ای ثبت نشده" />}
-        {assets.map((a) => (
-          <div key={a.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 4px", borderBottom: "1px solid #f0eef3" }}>
-            <div>
-              <div style={{ fontWeight: 700, fontSize: 14 }}>{a.symbol} <span style={{ fontSize: 11, color: "#8a8194" }}>({a.kind === "crypto" ? "ارز دیجیتال" : "بورس"})</span></div>
-              <div style={{ fontSize: 12, color: "#8a8194" }}>تعداد: {a.quantity} · ارزش: {toFaInt(a.quantity * a.currentPrice)} ریال</div>
-            </div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <AssetPriceEdit asset={a} setAssets={setAssets} st={st} />
-              <button onClick={() => setAssets((p) => p.filter((x) => x.id !== a.id))} style={{ background: "none", border: "none", color: BRAND.crimson, cursor: "pointer" }}><Trash2 size={15} /></button>
-            </div>
-          </div>
-        ))}
+        {assets.map((a) => {
+          const expanded = expandedId === a.id;
+          const value = Number(a.quantity || 0) * Number(a.currentPrice || 0);
+          const cost = Number(a.quantity || 0) * Number(a.avgPrice || 0);
+          const pl = value - cost;
+          return <div key={a.id} data-rec={a.id} style={{ borderBottom: "1px solid #f0eef3" }}>
+            <Row title={`${a.symbol} (${a.kind === "crypto" ? "ارز دیجیتال" : "بورس"})`} subtitle={`تعداد: ${a.quantity}`} value={`${toFaInt(value)} ریال`} valueColor={BRAND.darkgreen}
+              leftIcon={expanded ? <ChevronDown size={16} /> : <Eye size={16} />} leftColor="#7a5cff"
+              onClick={() => { setExpandedId((x) => x === a.id ? null : a.id); setEditingId(null); setEditForm(null); }} chevron={null}
+              extra={<div style={{ display: "flex", gap: 4 }}>
+                <button onClick={(e) => { e.stopPropagation(); beginEdit(a); }} style={{ ...miniBtn, color: BRAND.violet }} title="ویرایش"><Pencil size={14} /></button>
+                <button onClick={(e) => { e.stopPropagation(); if (window.confirm("این دارایی حذف شود؟")) { setAssets((p) => p.filter((x) => x.id !== a.id)); setExpandedId(null); } }} style={{ ...miniBtn, color: BRAND.crimson }} title="حذف"><Trash2 size={14} /></button>
+              </div>} />
+            {expanded && <div style={{ background: "#f8f5fa", borderRadius: 12, padding: 12, margin: "0 0 10px", fontSize: 12, lineHeight: 1.9 }}>
+              <div><b>نماد:</b> {a.symbol}</div>
+              <div><b>نوع:</b> {a.kind === "crypto" ? "ارز دیجیتال" : "بورس"}</div>
+              <div><b>تعداد / مقدار:</b> {a.quantity}</div>
+              <div><b>قیمت خرید:</b> {toFaInt(a.avgPrice || 0)} ریال</div>
+              <div><b>قیمت فعلی:</b> {toFaInt(a.currentPrice || 0)} ریال</div>
+              <div><b>ارزش فعلی:</b> {toFaInt(value)} ریال</div>
+              {cost > 0 && <div><b>سود / زیان:</b> <span style={{ color: pl >= 0 ? BRAND.darkgreen : BRAND.crimson }}>{toFaInt(Math.abs(pl))} ریال {pl >= 0 ? "سود" : "زیان"}</span></div>}
+              {a.priceUpdatedAt && <div><b>آخرین بروزرسانی قیمت:</b> {jf(String(a.priceUpdatedAt).slice(0, 10))}</div>}
+              {editingId === a.id && editForm ? <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #e7e0eb" }}>
+                <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                  <button onClick={() => setEditForm((f) => ({ ...f, kind: "crypto" }))} style={pillStyle(editForm.kind === "crypto")}>ارز دیجیتال</button>
+                  <button onClick={() => setEditForm((f) => ({ ...f, kind: "stock" }))} style={pillStyle(editForm.kind === "stock")}>بورس</button>
+                </div>
+                <input value={editForm.symbol} onChange={(e) => setEditForm((f) => ({ ...f, symbol: e.target.value }))} placeholder="نماد" style={{ ...st.input, marginBottom: 7 }} />
+                <KeypadInput kind="decimal" value={editForm.quantity} onChange={(e) => setEditForm((f) => ({ ...f, quantity: e.target.value }))} placeholder="تعداد / مقدار" style={{ ...st.input, marginBottom: 7 }} inputMode="decimal" />
+                <AmountInput value={editForm.avgPrice} onChange={(v) => setEditForm((f) => ({ ...f, avgPrice: v }))} placeholder="قیمت خرید (ریال)" style={{ ...st.input, marginBottom: 7 }} />
+                <AmountInput value={editForm.currentPrice} onChange={(v) => setEditForm((f) => ({ ...f, currentPrice: v }))} placeholder="قیمت فعلی (ریال)" style={{ ...st.input, marginBottom: 7 }} />
+                <div style={{ display: "flex", gap: 7 }}><button onClick={() => saveEdit(a)} style={{ ...st.primaryBtn, flex: 1 }}>ذخیره</button><button onClick={() => { setEditingId(null); setEditForm(null); }} style={{ ...st.primaryBtn, flex: .6, background: "#eee", color: "#444" }}>انصراف</button></div>
+              </div> : <button onClick={() => beginEdit(a)} style={{ ...st.primaryBtn, marginTop: 9, padding: "7px 12px", fontSize: 11.5 }}>ویرایش</button>}
+            </div>}
+          </div>;
+        })}
       </div>
     </div>
   );
@@ -5654,15 +5760,29 @@ function GoalsManager({ goals, setGoals }) {
   </div>;
 }
 
-function PersonsManager({ persons, setPersons, focusId = null }) {
+function PersonsManager({ persons, setPersons, debts = [], focusId = null }) {
   const st = useStyles();
+  const t = useT();
   const [form, setForm] = useState({ name: "", phone: "", note: "" });
-  const [editing, setEditing] = useState(null);
-  function save() {
+  const [expandedId, setExpandedId] = useState(null);
+  const [editingId, setEditingId] = useState(null);
+  const [editForm, setEditForm] = useState(null);
+  useEffect(() => { if (focusId && persons.some((x) => x.id === focusId)) setExpandedId(focusId); }, [focusId, persons]);
+  useFocusScroll(focusId);
+  function add() {
     if (!form.name.trim()) return;
-    if (editing) setPersons((p) => p.map((x) => x.id === editing ? { ...x, ...form, name: form.name.trim() } : x));
-    else setPersons((p) => [{ id: uid(), ...form, name: form.name.trim() }, ...p]);
-    setForm({ name: "", phone: "", note: "" }); setEditing(null);
+    setPersons((p) => [{ id: uid(), ...form, name: form.name.trim() }, ...p]);
+    setForm({ name: "", phone: "", note: "" });
+  }
+  function beginEdit(p) { setExpandedId(p.id); setEditingId(p.id); setEditForm({ name: p.name || "", phone: p.phone || "", note: p.note || "" }); }
+  function saveEdit(p) {
+    if (!editForm?.name?.trim()) return;
+    setPersons((all) => all.map((x) => x.id === p.id ? { ...x, ...editForm, name: editForm.name.trim() } : x));
+    setEditingId(null); setEditForm(null);
+  }
+  function remove(p) {
+    if (debts.some((d) => d.personId === p.id)) { alert("برای این شخص بدهی یا طلب ثبت شده است؛ ابتدا همان رکوردها را حذف یا اصلاح کنید."); return; }
+    if (window.confirm(`«${p.name}» حذف شود؟`)) { setPersons((all) => all.filter((x) => x.id !== p.id)); setExpandedId(null); }
   }
   return <div>
     <div style={{ ...st.card, padding: 14, marginBottom: 16 }}>
@@ -5670,26 +5790,128 @@ function PersonsManager({ persons, setPersons, focusId = null }) {
       <input placeholder="نام و نام خانوادگی / فروشگاه" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} style={st.input} />
       <input placeholder="شماره تماس" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} style={st.input} inputMode="tel" />
       <input placeholder="توضیحات" value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} style={st.input} />
-      <button onClick={save} style={st.primaryBtn}>{editing ? "ذخیره تغییرات" : "افزودن شخص"}</button>
+      <button onClick={add} style={st.primaryBtn}>افزودن شخص</button>
     </div>
     <div style={{ ...st.card, padding: "4px 12px" }}>
       {persons.length === 0 && <EmptyRow text="شخصی ثبت نشده" />}
-      {persons.map((p) => <Row key={p.id} title={p.name} subtitle={[p.phone, p.note].filter(Boolean).join(" · ") || "طرف حساب"}
-        extra={<div style={{ display: "flex", gap: 5 }}><button onClick={() => { setEditing(p.id); setForm({ name: p.name, phone: p.phone || "", note: p.note || "" }); }} style={miniBtn}><Pencil size={13}/></button></div>}
-        leftIcon={<Trash2 size={15}/>} leftColor={BRAND.crimson} onClick={() => setPersons((all) => all.filter((x) => x.id !== p.id))} chevron={null} />)}
+      {persons.map((p) => {
+        const expanded = expandedId === p.id;
+        const mine = debts.filter((d) => d.personId === p.id);
+        const openRec = mine.filter((d) => !d.settled && d.kind === "receivable").reduce((a, d) => a + Number(d.amount || 0), 0);
+        const openPay = mine.filter((d) => !d.settled && d.kind === "payable").reduce((a, d) => a + Number(d.amount || 0), 0);
+        return <div key={p.id} data-rec={p.id} style={{ borderBottom: "1px solid #f0eef3" }}>
+          <Row title={p.name} subtitle={[p.phone, p.note].filter(Boolean).join(" · ") || "طرف حساب"} leftIcon={expanded ? <ChevronDown size={16} /> : <Eye size={16} />} leftColor={BRAND.violet}
+            onClick={() => { setExpandedId((x) => x === p.id ? null : p.id); setEditingId(null); setEditForm(null); }} chevron={null}
+            extra={<div style={{ display: "flex", gap: 4 }}>
+              <button onClick={(e) => { e.stopPropagation(); beginEdit(p); }} style={{ ...miniBtn, color: BRAND.violet }} title="ویرایش"><Pencil size={14} /></button>
+              <button onClick={(e) => { e.stopPropagation(); remove(p); }} style={{ ...miniBtn, color: BRAND.crimson }} title="حذف"><Trash2 size={14} /></button>
+            </div>} />
+          {expanded && <div style={{ background: "#f8f5fa", borderRadius: 12, padding: 12, margin: "0 0 10px", fontSize: 12, lineHeight: 1.9 }}>
+            <div><b>نام:</b> {p.name}</div>
+            <div><b>شماره تماس:</b> {p.phone || "—"}</div>
+            {p.note && <div><b>توضیحات:</b> {p.note}</div>}
+            <div><b>طلب باز:</b> <span style={{ color: BRAND.darkgreen }}>{toFaInt(openRec)} ریال</span></div>
+            <div><b>بدهی باز:</b> <span style={{ color: BRAND.crimson }}>{toFaInt(openPay)} ریال</span></div>
+            <div><b>تعداد رکوردهای بدهی/طلب:</b> {toFaInt(mine.length)}</div>
+            {editingId === p.id && editForm ? <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #e7e0eb" }}>
+              <input value={editForm.name} onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))} placeholder="نام" style={{ ...st.input, marginBottom: 7 }} />
+              <input value={editForm.phone} onChange={(e) => setEditForm((f) => ({ ...f, phone: e.target.value }))} placeholder="شماره تماس" style={{ ...st.input, marginBottom: 7 }} inputMode="tel" />
+              <input value={editForm.note} onChange={(e) => setEditForm((f) => ({ ...f, note: e.target.value }))} placeholder="توضیحات" style={{ ...st.input, marginBottom: 7 }} />
+              <div style={{ display: "flex", gap: 7 }}><button onClick={() => saveEdit(p)} style={{ ...st.primaryBtn, flex: 1 }}>ذخیره</button><button onClick={() => { setEditingId(null); setEditForm(null); }} style={{ ...st.primaryBtn, flex: .6, background: "#eee", color: "#444" }}>انصراف</button></div>
+            </div> : <button onClick={() => beginEdit(p)} style={{ ...st.primaryBtn, marginTop: 9, padding: "7px 12px", fontSize: 11.5 }}>ویرایش</button>}
+          </div>}
+        </div>;
+      })}
     </div>
-    <div style={{ fontSize: 12, color: useT().sub, marginTop: 10 }}>این بخش برای ثبت اشخاص، فروشگاه‌ها و طرف حساب‌هاست و پایه‌ی مدیریت بدهکار/بستانکار را تشکیل می‌دهد.</div>
+    <div style={{ fontSize: 12, color: t.sub, marginTop: 10 }}>این بخش برای ثبت اشخاص، فروشگاه‌ها و طرف حساب‌هاست و پایه‌ی مدیریت بدهکار/بستانکار را تشکیل می‌دهد.</div>
   </div>;
 }
 
 function DebtsManager({ debts, setDebts, persons, accounts, focusId = null }) {
-  const st = useStyles(); const [form,setForm]=useState({personId:"",kind:"receivable",amount:"",dueDate:todayISO(),note:""}); const [expandedId,setExpandedId]=useState(null); const [editingId,setEditingId]=useState(null); const [editForm,setEditForm]=useState(null);
-  function add(){const amount=Number(form.amount||0);if(!form.personId||!amount)return;setDebts(p=>[{id:uid(),...form,amount,settled:false},...p]);setForm({personId:"",kind:"receivable",amount:"",dueDate:todayISO(),note:""});}
-  function beginEdit(d){setExpandedId(d.id);setEditingId(d.id);setEditForm({...d,amount:String(d.amount||"")});}
-  function saveEdit(d){if(!editForm?.amount||!editForm?.personId)return;setDebts(p=>p.map(x=>x.id===d.id?{...x,...editForm,amount:Number(editForm.amount)}:x));setEditingId(null);setEditForm(null);}
-  const open=debts.filter(d=>!d.settled);
-  return <div><div style={{...st.card,padding:14,marginBottom:16}}><div style={{fontWeight:800,marginBottom:10}}>ثبت بدهی / طلب</div><select value={form.personId} onChange={e=>setForm({...form,personId:e.target.value})} style={st.input}><option value="">انتخاب طرف حساب</option>{persons.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select><div style={{display:"flex",gap:8,marginBottom:10}}><button onClick={()=>setForm({...form,kind:"receivable"})} style={pillStyle(form.kind==="receivable")}>طلب</button><button onClick={()=>setForm({...form,kind:"payable"})} style={pillStyle(form.kind==="payable")}>بدهی</button></div><AmountInput placeholder="مبلغ" value={form.amount} onChange={v=>setForm({...form,amount:v})} style={st.input}/><JalaliDateInput value={form.dueDate} onChange={v=>setForm({...form,dueDate:v})} style={st.input}/><input placeholder="توضیحات" value={form.note} onChange={e=>setForm({...form,note:e.target.value})} style={st.input}/><button onClick={add} style={st.primaryBtn}>ثبت</button></div>
-  <div style={{...st.card,padding:"4px 12px"}}>{!open.length&&<EmptyRow text="بدهی یا طلب باز وجود ندارد"/>}{open.map(d=>{const person=persons.find(p=>p.id===d.personId);const expanded=expandedId===d.id;return <div key={d.id} style={{borderBottom:"1px solid #f0eef3"}}><Row title={person?.name||"طرف حساب حذف‌شده"} subtitle={`${d.kind==="receivable"?"طلب":"بدهی"} · ${faLongDate(new Date(d.dueDate))}`} value={`${toFaInt(d.amount)} ریال`} valueColor={d.kind==="receivable"?BRAND.darkgreen:BRAND.crimson} leftIcon={expanded?<ChevronDown size={16}/>:<Eye size={16}/>} leftColor={d.kind==="receivable"?BRAND.green:BRAND.crimson} onClick={()=>{setExpandedId(x=>x===d.id?null:d.id);setEditingId(null)}} chevron={null} extra={<div style={{display:"flex",gap:4}}><button onClick={e=>{e.stopPropagation();beginEdit(d)}} style={{...miniBtn,color:BRAND.violet}}><Pencil size={14}/></button><button onClick={e=>{e.stopPropagation();setDebts(p=>p.map(x=>x.id===d.id?{...x,settled:true,settledAt:todayISO()}:x))}} style={{...miniBtn,color:BRAND.green}}><Check size={14}/></button></div>}/>{expanded&&<div style={{background:"#f8f5fa",borderRadius:12,padding:12,margin:"0 0 10px",fontSize:12,lineHeight:1.9}}><div><b>طرف حساب:</b> {person?.name||"—"}</div><div><b>نوع:</b> {d.kind==="receivable"?"طلب":"بدهی"}</div><div><b>مبلغ:</b> {toFaInt(d.amount)} ریال</div><div><b>سررسید:</b> {faLongDate(new Date(d.dueDate))}</div>{d.note&&<div><b>توضیح:</b> {d.note}</div>}{editingId===d.id&&editForm&&<div style={{marginTop:9}}><select value={editForm.personId} onChange={e=>setEditForm(f=>({...f,personId:e.target.value}))} style={{...st.input,marginBottom:7}}>{persons.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select><AmountInput value={editForm.amount} onChange={v=>setEditForm(f=>({...f,amount:v}))} style={{...st.input,marginBottom:7}}/><JalaliDateInput value={editForm.dueDate} onChange={v=>setEditForm(f=>({...f,dueDate:v}))} style={{...st.input,marginBottom:7}}/><input value={editForm.note||""} onChange={e=>setEditForm(f=>({...f,note:e.target.value}))} style={{...st.input,marginBottom:7}}/><div style={{display:"flex",gap:7}}><button onClick={()=>saveEdit(d)} style={{...st.primaryBtn,flex:1}}>ذخیره</button><button onClick={()=>{setEditingId(null);setEditForm(null)}} style={{...st.primaryBtn,flex:.6,background:"#eee",color:"#444"}}>انصراف</button></div></div>}{editingId!==d.id&&<button onClick={()=>beginEdit(d)} style={{...st.primaryBtn,marginTop:8,padding:"7px 12px",fontSize:11.5}}>ویرایش</button>}</div>}</div>})}</div></div>;
+  const st = useStyles();
+  const [form, setForm] = useState({ personId: "", kind: "receivable", amount: "", dueDate: todayISO(), note: "" });
+  const [expandedId, setExpandedId] = useState(null);
+  const [editingId, setEditingId] = useState(null);
+  const [editForm, setEditForm] = useState(null);
+  const [showSettled, setShowSettled] = useState(false);
+  useEffect(() => {
+    if (!focusId) return;
+    const d = debts.find((x) => x.id === focusId);
+    if (d) { if (d.settled) setShowSettled(true); setExpandedId(focusId); }
+  }, [focusId, debts]);
+  useFocusScroll(focusId);
+  function add() {
+    const amount = Number(form.amount || 0);
+    if (!form.personId || !amount) return;
+    setDebts((p) => [{ id: uid(), ...form, amount, settled: false }, ...p]);
+    setForm({ personId: "", kind: "receivable", amount: "", dueDate: todayISO(), note: "" });
+  }
+  function beginEdit(d) { setExpandedId(d.id); setEditingId(d.id); setEditForm({ personId: d.personId || "", kind: d.kind || "receivable", amount: String(d.amount || ""), dueDate: d.dueDate || todayISO(), note: d.note || "" }); }
+  function saveEdit(d) {
+    if (!editForm?.amount || !editForm?.personId) return;
+    setDebts((p) => p.map((x) => x.id === d.id ? { ...x, ...editForm, amount: Number(editForm.amount) } : x));
+    setEditingId(null); setEditForm(null);
+  }
+  function settle(d) {
+    if (!window.confirm("این مورد تسویه شود؟")) return;
+    setDebts((p) => p.map((x) => x.id === d.id ? { ...x, settled: true, settledAt: todayISO() } : x));
+  }
+  function reopen(d) { setDebts((p) => p.map((x) => x.id === d.id ? { ...x, settled: false, settledAt: undefined } : x)); }
+  function remove(d) {
+    if (!window.confirm("این رکورد حذف شود؟")) return;
+    setDebts((p) => p.filter((x) => x.id !== d.id)); setExpandedId(null); setEditingId(null);
+  }
+  const list = debts.filter((d) => showSettled || !d.settled);
+  const settledCount = debts.filter((d) => d.settled).length;
+  return <div>
+    <div style={{ ...st.card, padding: 14, marginBottom: 16 }}>
+      <div style={{ fontWeight: 800, marginBottom: 10 }}>ثبت بدهی / طلب</div>
+      <select value={form.personId} onChange={(e) => setForm({ ...form, personId: e.target.value })} style={st.input}><option value="">انتخاب طرف حساب</option>{persons.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
+      <div style={{ display: "flex", gap: 8, marginBottom: 10 }}><button onClick={() => setForm({ ...form, kind: "receivable" })} style={pillStyle(form.kind === "receivable")}>طلب</button><button onClick={() => setForm({ ...form, kind: "payable" })} style={pillStyle(form.kind === "payable")}>بدهی</button></div>
+      <AmountInput placeholder="مبلغ" value={form.amount} onChange={(v) => setForm({ ...form, amount: v })} style={st.input} />
+      <JalaliDateInput value={form.dueDate} onChange={(v) => setForm({ ...form, dueDate: v })} style={st.input} />
+      <input placeholder="توضیحات" value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} style={st.input} />
+      <button onClick={add} style={st.primaryBtn}>ثبت</button>
+    </div>
+    {settledCount > 0 && <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, fontWeight: 700, margin: "0 4px 10px", cursor: "pointer" }}><input type="checkbox" checked={showSettled} onChange={(e) => setShowSettled(e.target.checked)} /> نمایش تسویه‌شده‌ها ({toFaInt(settledCount)})</label>}
+    <div style={{ ...st.card, padding: "4px 12px" }}>
+      {!list.length && <EmptyRow text="بدهی یا طلب باز وجود ندارد" />}
+      {list.map((d) => {
+        const person = persons.find((p) => p.id === d.personId);
+        const expanded = expandedId === d.id;
+        return <div key={d.id} data-rec={d.id} style={{ borderBottom: "1px solid #f0eef3", opacity: d.settled ? 0.6 : 1 }}>
+          <Row title={person?.name || "طرف حساب حذف‌شده"} subtitle={`${d.kind === "receivable" ? "طلب" : "بدهی"} · ${d.dueDate ? faLongDate(new Date(d.dueDate)) : "—"}${d.settled ? " · تسویه‌شده" : ""}`} value={`${toFaInt(d.amount)} ریال`} valueColor={d.kind === "receivable" ? BRAND.darkgreen : BRAND.crimson}
+            leftIcon={expanded ? <ChevronDown size={16} /> : <Eye size={16} />} leftColor={d.kind === "receivable" ? BRAND.green : BRAND.crimson}
+            onClick={() => { setExpandedId((x) => x === d.id ? null : d.id); setEditingId(null); setEditForm(null); }} chevron={null}
+            extra={<div style={{ display: "flex", gap: 4 }}>
+              <button onClick={(e) => { e.stopPropagation(); beginEdit(d); }} style={{ ...miniBtn, color: BRAND.violet }} title="ویرایش"><Pencil size={14} /></button>
+              {!d.settled && <button onClick={(e) => { e.stopPropagation(); settle(d); }} style={{ ...miniBtn, color: BRAND.green }} title="تسویه"><Check size={14} /></button>}
+            </div>} />
+          {expanded && <div style={{ background: "#f8f5fa", borderRadius: 12, padding: 12, margin: "0 0 10px", fontSize: 12, lineHeight: 1.9 }}>
+            <div><b>طرف حساب:</b> {person?.name || "—"}</div>
+            <div><b>نوع:</b> {d.kind === "receivable" ? "طلب" : "بدهی"}</div>
+            <div><b>مبلغ:</b> {toFaInt(d.amount)} ریال</div>
+            <div><b>سررسید:</b> {d.dueDate ? faLongDate(new Date(d.dueDate)) : "—"}</div>
+            <div><b>وضعیت:</b> {d.settled ? `تسویه‌شده${d.settledAt ? ` (${jf(d.settledAt)})` : ""}` : "باز"}</div>
+            {d.note && <div><b>توضیحات:</b> {d.note}</div>}
+            {editingId === d.id && editForm ? <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #e7e0eb" }}>
+              <select value={editForm.personId} onChange={(e) => setEditForm((f) => ({ ...f, personId: e.target.value }))} style={{ ...st.input, marginBottom: 7 }}><option value="">طرف حساب</option>{persons.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
+              <div style={{ display: "flex", gap: 8, marginBottom: 8 }}><button onClick={() => setEditForm((f) => ({ ...f, kind: "receivable" }))} style={pillStyle(editForm.kind === "receivable")}>طلب</button><button onClick={() => setEditForm((f) => ({ ...f, kind: "payable" }))} style={pillStyle(editForm.kind === "payable")}>بدهی</button></div>
+              <AmountInput value={editForm.amount} onChange={(v) => setEditForm((f) => ({ ...f, amount: v }))} placeholder="مبلغ" style={{ ...st.input, marginBottom: 7 }} />
+              <JalaliDateInput value={editForm.dueDate} onChange={(v) => setEditForm((f) => ({ ...f, dueDate: v }))} style={{ ...st.input, marginBottom: 7 }} />
+              <input value={editForm.note} onChange={(e) => setEditForm((f) => ({ ...f, note: e.target.value }))} placeholder="توضیحات" style={{ ...st.input, marginBottom: 7 }} />
+              <div style={{ display: "flex", gap: 7 }}><button onClick={() => saveEdit(d)} style={{ ...st.primaryBtn, flex: 1 }}>ذخیره</button><button onClick={() => { setEditingId(null); setEditForm(null); }} style={{ ...st.primaryBtn, flex: .6, background: "#eee", color: "#444" }}>انصراف</button></div>
+            </div> : <div style={{ display: "flex", gap: 6, marginTop: 9, flexWrap: "wrap" }}>
+              <button onClick={() => beginEdit(d)} style={{ ...st.primaryBtn, margin: 0, padding: "7px 12px", fontSize: 11.5 }}>ویرایش</button>
+              {d.settled ? <button onClick={() => reopen(d)} style={{ ...st.primaryBtn, margin: 0, padding: "7px 12px", fontSize: 11.5, background: BRAND.orange }}>بازگشایی</button>
+                : <button onClick={() => settle(d)} style={{ ...st.primaryBtn, margin: 0, padding: "7px 12px", fontSize: 11.5, background: BRAND.green }}>تسویه</button>}
+              <button onClick={() => remove(d)} style={{ ...st.primaryBtn, margin: 0, padding: "7px 12px", fontSize: 11.5, background: BRAND.crimson }}>حذف</button>
+            </div>}
+          </div>}
+        </div>;
+      })}
+    </div>
+  </div>;
 }
 
 function CurrenciesManager({ currencies, setCurrencies }) {
