@@ -2278,6 +2278,9 @@ export default function App() {
   const totalAssets = useMemo(() => assets.reduce((s, a) => s + (a.quantity * a.currentPrice || 0), 0), [assets]);
 
   const yearTransactions = useMemo(() => transactions.filter((t) => jalaliYear(new Date(t.date)) === year), [transactions, year]);
+  // Compatibility alias: older report code used the lowercase yeartx identifier.
+  // Keep it defined in this component so legacy references cannot crash the dashboard.
+  const yeartx = yearTransactions;
   const totalIncomeYear = useMemo(() => yearTransactions.filter((t) => t.type === "income" && isPnlTransaction(t)).reduce((s, t) => s + pnlAmount(t), 0), [yearTransactions]);
   const totalExpenseYear = useMemo(() => yearTransactions.filter((t) => t.type === "expense" && isPnlTransaction(t)).reduce((s, t) => s + pnlAmount(t), 0), [yearTransactions]);
   const gaugeMax = Math.max(totalIncomeYear, totalExpenseYear, 1);
