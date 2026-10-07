@@ -2310,7 +2310,7 @@ export default function App() {
   function addAccount(a) { const item = { ...a, id: a.id || uid() }; setAccounts((p) => [...p, item]); return item.id; }
   function deleteAccount(id) {
     const used = transactions.some((t) => t.accountId === id || t.toAccountId === id) || loans.some((l) => l.accountId === id) || checks.some((c) => c.accountId === id) || bills.some((b) => b.accountId === id) || debts.some((d) => d.accountId === id) || assets.some((a) => a.accountId === id);
-    if (used) { setAccounts((p) => p.map((a) => a.id === id ? { ...a, active: false, archivedAt: new Date().toISOString() } : a)); alert("این حساب سابقه مالی دارد و حذف نشد؛ به‌جای حذف، بایگانی شد."); return; }
+    if (used) { setAccounts((p) => p.map((a) => a.id === id ? { ...a, active: false, archivedAt: new Date().toISOString() } : a)); alert("این حساب سابقه مالی دارد و حذف نشد؛ به‌جای حذف، بایگانی شد. هر زمان خواستی از «حساب‌ها و کارت‌ها» بازگردانی‌اش کن."); return; }
     setAccounts((p) => p.filter((a) => a.id !== id));
   }
   function updateAccount(id, patch) { setAccounts((p) => p.map((a) => a.id === id ? { ...a, ...patch } : a)); }
@@ -2620,6 +2620,7 @@ export default function App() {
                 onEditTransaction={(tx) => { setPrefillTx({ ...tx, _editId: tx.id }); setShowAdd(true); }}
                 onDeleteTransaction={deleteTransaction}
                 onDeleteAccount={deleteAccount}
+                onUpdateAccount={updateAccount}
                 onAddTransaction={(type) => { setPrefillTx(type ? { type } : null); setShowAdd(true); }}
               />
             )}
@@ -2745,7 +2746,7 @@ function HomeView({
   transactions, allTransactions, bills, loans, checks, assets, totalAssets, persons = [], debts = [],
   openAccounts, onEditAccount, openBudgets, openBills, openLoans, openChecks, openAssets, openPersons, openDebts, openSubView,
   homeDay, setHomeDay, catById, settings, setSettings, rates, fetchRates, onNote, onReminder, onAddTransaction, shortcuts = [], onRunShortcut, openShortcuts, onOpenTransactions,
-  onOpenItem, onEditTransaction, onDeleteTransaction, onDeleteAccount
+  onOpenItem, onEditTransaction, onDeleteTransaction, onDeleteAccount, onUpdateAccount
 }) {
   const t = useT();
   const [openItem, setOpenItem] = useState(null);   // فقط یک سطر همزمان باز است
@@ -2859,7 +2860,9 @@ function HomeView({
           <DetailBox lines={lines}>
             <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
               <button onClick={() => onEditAccount?.(a)} style={detailActionBtn(BRAND.violet, true)}>ویرایش</button>
-              <button onClick={() => { if (window.confirm(`«${a.name}» حذف شود؟ اگر سابقه مالی داشته باشد به‌جای حذف، بایگانی می‌شود.`)) { onDeleteAccount?.(a.id); setOpenItem(null); } }} style={detailActionBtn(BRAND.crimson, false)}>حذف / بایگانی</button>
+              {a.active === false
+                ? <button onClick={() => onUpdateAccount?.(a.id, { active: true, archivedAt: undefined })} style={detailActionBtn(BRAND.darkgreen, false)}>بازگردانی از بایگانی</button>
+                : <button onClick={() => { if (window.confirm(`«${a.name}» حذف شود؟ اگر سابقه مالی داشته باشد به‌جای حذف، بایگانی می‌شود.`)) { onDeleteAccount?.(a.id); setOpenItem(null); } }} style={detailActionBtn(BRAND.crimson, false)}>حذف / بایگانی</button>}
             </div>
           </DetailBox>
         )}
@@ -4122,6 +4125,23 @@ function ShortcutsManager({ shortcuts, setShortcuts, categories, accounts }) {
   </div>;
 }
 
+// تاریخ «n ماه شمسی قبل» با همان روزِ ماه (مثل روش بانک‌ها: روزهای یکسان از ماه‌های مختلف)
+function jalaliMonthsAgoISO(iso, n) {
+  const [Y, M, D] = iso.split("-").map(Number);
+  const p = jalaliParts(new Date(Y, M - 1, D, 12));
+  const total = p.y * 12 + (p.m - 1) - n;
+  const y = Math.floor(total / 12), m = (total % 12 + 12) % 12 + 1;
+  const toISO = ([gy, gm, gd]) => `${gy}-${String(gm).padStart(2, "0")}-${String(gd).padStart(2, "0")}`;
+  let day = p.day;
+  while (day > 29) {   // اگر روز در ماه مقصد وجود نداشت (مثلا ۳۱ در مهر) به آخرین روز همان ماه برمی‌گردد
+    const g = jalaliToGregorian(y, m, day);
+    const back = jalaliParts(new Date(g[0], g[1] - 1, g[2], 12));
+    if (back.m === m && back.day === day) break;
+    day--;
+  }
+  return toISO(jalaliToGregorian(y, m, day));
+}
+
 function AccountAveragePanel({ account, transactions = [], accountBalance, onClose }) {
   const st = useStyles();
   const t = useT();
@@ -4133,8 +4153,9 @@ function AccountAveragePanel({ account, transactions = [], accountBalance, onClo
 
   const range = useMemo(() => {
     if (period === "custom") return { from, to: from <= to ? to : from };
-    const days = period === "1m" ? 30 : period === "3m" ? 90 : period === "6m" ? 180 : 365;
-    return { from: addDays(todayISO(), -(days - 1)), to: todayISO() };
+    const months = period === "1m" ? 1 : period === "3m" ? 3 : period === "6m" ? 6 : 12;
+    const today = todayISO();
+    return { from: addDays(jalaliMonthsAgoISO(today, months), 1), to: today };
   }, [period, from, to]);
 
   // بانک مهر ایران معدل را بر مبنای مانده پایان روز در بازه محاسبه می‌کند.
@@ -4156,11 +4177,14 @@ function AccountAveragePanel({ account, transactions = [], accountBalance, onClo
       total,
       average: total / days,
       startBalance: rows[0]?.balance || 0,
-      endBalance: rows[rows.length - 1]?.balance || Number(accountBalance(account.id) || 0),
+      endBalance: rows.length ? rows[rows.length - 1].balance : 0,
       min: rows.length ? Math.min(...rows.map(r => r.balance)) : 0,
       max: rows.length ? Math.max(...rows.map(r => r.balance)) : 0,
     };
-  }, [account, transactions, accountBalance, range.from, range.to]);
+  }, [account, transactions, range.from, range.to]);
+
+  // مانده فعلی = مانده تا پایان امروز (تراکنش‌های با تاریخ آینده حساب نمی‌شوند)
+  const currentBalance = useMemo(() => Number(balanceAtDate(account, transactions, todayISO()) || 0), [account, transactions]);
 
   const goal = useMemo(() => {
     const wanted = Number(normalizeDigitsText(String(target)).replace(/[,٬،]/g, ""));
@@ -4169,7 +4193,7 @@ function AccountAveragePanel({ account, transactions = [], accountBalance, onClo
 
     // امروز را به عنوان یک روز واقعی با مانده فعلی در نظر می‌گیریم؛
     // از فردا تا پایان هدف، مانده ثابت موردنیاز را به‌صورت سناریوی پایه محاسبه می‌کنیم.
-    const current = Number(accountBalance(account.id) || 0);
+    const current = currentBalance;
     const today = todayISO();
     const futureDates = [];
     for (let i = 1; i < days; i++) futureDates.push(addDays(today, i));
@@ -4181,9 +4205,10 @@ function AccountAveragePanel({ account, transactions = [], accountBalance, onClo
     const projectedAverageIfCurrentHeld = (current * days) / days;
     const feasibleWithoutDeposit = current >= wanted;
     return { wanted, days, current, requiredFutureBalance, extraNow, alreadyAbove, projectedAverageIfCurrentHeld, feasibleWithoutDeposit };
-  }, [target, goalDays, account, accountBalance]);
+  }, [target, goalDays, currentBalance]);
 
   const money = (n) => `${toFaInt(Math.round(n || 0))} ریال`;
+  const num = (n) => toFaInt(Math.round(n || 0));
   const pct = averageData.average ? Math.min(999, (averageData.endBalance / averageData.average) * 100) : 0;
 
   return (
@@ -4211,11 +4236,11 @@ function AccountAveragePanel({ account, transactions = [], accountBalance, onClo
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
         <div style={{ background: `${BRAND.violet}12`, borderRadius: 12, padding: 12, textAlign: "center" }}>
           <div style={{ fontSize: 11, color: t.sub }}>معدل حساب</div>
-          <div style={{ fontSize: 20, fontWeight: 900, color: BRAND.violet, marginTop: 3 }}>{money(averageData.average)}</div>
+          <div style={{ fontSize: 20, fontWeight: 900, color: BRAND.violet, marginTop: 3 }}>{num(averageData.average)}</div>
         </div>
         <div style={{ background: `${BRAND.darkgreen}12`, borderRadius: 12, padding: 12, textAlign: "center" }}>
           <div style={{ fontSize: 11, color: t.sub }}>مانده فعلی</div>
-          <div style={{ fontSize: 20, fontWeight: 900, color: BRAND.darkgreen, marginTop: 3 }}>{money(averageData.endBalance)}</div>
+          <div style={{ fontSize: 20, fontWeight: 900, color: BRAND.darkgreen, marginTop: 3 }}>{num(currentBalance)}</div>
         </div>
         <div style={{ padding: 10, border: `1px solid ${t.border}`, borderRadius: 10 }}><span style={{ fontSize: 11, color: t.sub }}>کمترین مانده</span><div style={{ fontWeight: 800 }}>{money(averageData.min)}</div></div>
         <div style={{ padding: 10, border: `1px solid ${t.border}`, borderRadius: 10 }}><span style={{ fontSize: 11, color: t.sub }}>بیشترین مانده</span><div style={{ fontWeight: 800 }}>{money(averageData.max)}</div></div>
@@ -4295,6 +4320,10 @@ function AccountsManager({ accounts, addAccount, deleteAccount, updateAccount, a
   }
 
   const bankAccounts = accounts.filter(a => a.type === "bank" || a.type === "card");
+  function confirmDelete(a) {
+    if (window.confirm(`«${a.name}» حذف شود؟\nاگر سابقه مالی داشته باشد حذف نمی‌شود و بایگانی می‌شود؛ بعداً از همین لیست می‌توانی بازگردانی‌اش کنی.`)) deleteAccount(a.id);
+  }
+  function restoreAccount(a) { updateAccount?.(a.id, { active: true, archivedAt: undefined }); }
 
   return <div>
     <div style={{ ...st.card, padding: 14, marginBottom: 16 }}>
@@ -4314,14 +4343,17 @@ function AccountsManager({ accounts, addAccount, deleteAccount, updateAccount, a
     </div>
     <div style={{ ...st.card, padding: "4px 12px" }}>
       {accounts.length === 0 && <EmptyRow text="حسابی ثبت نشده" />}
-      {accounts.map((a) => <div key={a.id}>
+      {accounts.map((a) => <div key={a.id} style={{ opacity: a.active === false ? 0.65 : 1 }}>
         <Row title={<>{a.name} {a.active === false && <span style={{fontSize:10,color:BRAND.crimson}}>· بایگانی</span>}</>} subtitle={`${a.type === "bank" ? "بانک" : a.type === "card" ? "کارت" : "صندوق"} · موجودی: ${toFaInt(accountBalance(a.id))} ریال`}
           extra={<div style={{ display: "flex", gap: 4 }}>
             {(a.type === "bank" || a.type === "card") && <button onClick={(e) => { e.stopPropagation(); setAverageAccountId(averageAccountId === a.id ? null : a.id); }} style={{ ...miniBtn, color: BRAND.header, fontWeight: 800, fontSize: 11, width: "auto", padding: "0 7px" }} title="معدل حساب">معدل</button>}
             <button onClick={(e) => { e.stopPropagation(); openEdit(a); }} style={{ ...miniBtn, color: BRAND.violet }} title="ویرایش حساب"><Pencil size={13} /></button>
             <button onClick={(e) => { e.stopPropagation(); toggleFavorite("accounts", a.id); }} style={{ background: "none", border: "none", cursor: "pointer" }}><Star size={16} fill={favorites.accounts.includes(a.id) ? "#f5b301" : "none"} color="#f5b301" /></button>
           </div>}
-          leftIcon={<Trash2 size={15} />} leftColor={BRAND.crimson} onClick={() => deleteAccount(a.id)} chevron={null} />
+          leftIcon={a.active === false
+            ? <span role="button" title="بازگردانی از بایگانی" onClick={(e) => { e.stopPropagation(); restoreAccount(a); }} style={{ width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}><RotateCcw size={15} /></span>
+            : <span role="button" title="حذف حساب" onClick={(e) => { e.stopPropagation(); confirmDelete(a); }} style={{ width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}><Trash2 size={15} /></span>}
+          leftColor={a.active === false ? BRAND.darkgreen : BRAND.crimson} chevron={null} />
         {averageAccountId === a.id && <AccountAveragePanel account={a} transactions={transactions} accountBalance={accountBalance} onClose={() => setAverageAccountId(null)} />}
         {editingId === a.id && <div style={{ background: "#f7f4fa", borderRadius: 12, padding: 10, margin: "2px 0 10px" }}>
           <input value={editForm.name} onChange={(e) => setEditForm(f => ({ ...f, name: e.target.value }))} placeholder="نام حساب" style={{ ...st.input, marginBottom: 7 }} />
