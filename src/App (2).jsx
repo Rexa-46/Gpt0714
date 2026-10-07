@@ -2063,6 +2063,7 @@ export default function App() {
 
   const [tab, setTab] = useState("home");
   const [subView, setSubView] = useState(null);
+  const [focusTarget, setFocusTarget] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
   const [prefillTx, setPrefillTx] = useState(null);
   const [open, setOpen] = useState({ shortcut: true });
@@ -2089,6 +2090,17 @@ export default function App() {
     }
   }
 
+
+  function openHomeRecord(kind, id) {
+    if (!id) return;
+    const map = { expense: "expenses", income: "incomes", account: "accounts", fund: "cashboxes", loan: "loans", check: "checks", bill: "bills", asset: "assets", debt: "debts", recurring: "recurring", person: "persons" };
+    const view = map[kind];
+    if (!view) return;
+    setFocusTarget({ kind, id });
+    setSubView(view);
+    setMenuOpen(false);
+    setTab("home");
+  }
 
   const shared = settings.sharedFamily;
 
@@ -2538,7 +2550,7 @@ export default function App() {
         )}
 
         {subView ? (
-          <SubViewContent subView={subView} ctx={ctx} onBack={() => setSubView(null)} />
+          <SubViewContent subView={subView} ctx={ctx} focusTarget={focusTarget} onBack={() => { setSubView(null); setFocusTarget(null); }} />
         ) : (
           <div style={{ flex: 1, overflowY: "auto", paddingBottom: 8 }}>
             {tab === "home" && (
@@ -2560,6 +2572,7 @@ export default function App() {
                 onRunShortcut={(sc) => { setShowQuickAdd(false); setShowAdd(true); setPrefillTx({ type: sc.type, categoryId: sc.categoryId, accountId: sc.accountId, note: sc.note || `میانبر: ${sc.name}` }); }}
                 openShortcuts={() => setSubView("shortcuts")}
                 onOpenTransactions={() => setTab("transactions")}
+                onOpenRecord={openHomeRecord}
                 onAddTransaction={(type) => { setPrefillTx(type ? { type } : null); setShowAdd(true); }}
               />
             )}
@@ -2683,6 +2696,16 @@ function HomeView({
     bills: { color: BRAND.crimson, title: "یادآوری قبض ها", icon: <BellRing size={20} /> },
   };
 
+  function loanRemaining(l) {
+    const principal = Number(l?.principal || 0);
+    const installments = Math.max(1, Number(l?.installments || 0));
+    const monthly = Number(l?.monthlyPayment || 0);
+    const totalInterest = Math.max(0, installments * monthly - principal);
+    const interestPer = totalInterest / installments;
+    const principalPer = Math.max(0, monthly - interestPer);
+    return Math.max(0, principal - Number(l?.paidCount || 0) * principalPer);
+  }
+
   function sectionBody(key) {
     switch (key) {
       case "shortcut":
@@ -2728,24 +2751,24 @@ function HomeView({
         </>);
       }
       case "expense":
-        return expenseByCategory.length === 0 ? <EmptyRow text="هزینه‌ای ثبت نشده" /> : expenseByCategory.map((e) => <Row key={e.catId} title={e.name} value={formatMoney(e.amount, currency, usdRate)} valueColor={BRAND.crimson} />);
+        return expenseByCategory.length === 0 ? <EmptyRow text="هزینه‌ای ثبت نشده" /> : expenseByCategory.map((e) => { const first = allTransactions.find((tx) => tx.type === "expense" && tx.categoryId === e.catId); return <Row key={e.catId} title={e.name} subtitle="لمس برای مشاهده سندهای این دسته" value={formatMoney(e.amount, currency, usdRate)} valueColor={BRAND.crimson} onClick={() => first && onOpenRecord?.("expense", first.id)} />; });
       case "income":
-        return incomeByCategory.length === 0 ? <EmptyRow text="درآمدی ثبت نشده" /> : incomeByCategory.map((e) => <Row key={e.catId} title={e.name} value={formatMoney(e.amount, currency, usdRate)} valueColor={BRAND.darkgreen} />);
+        return incomeByCategory.length === 0 ? <EmptyRow text="درآمدی ثبت نشده" /> : incomeByCategory.map((e) => { const first = allTransactions.find((tx) => tx.type === "income" && tx.categoryId === e.catId); return <Row key={e.catId} title={e.name} subtitle="لمس برای مشاهده سندهای این دسته" value={formatMoney(e.amount, currency, usdRate)} valueColor={BRAND.darkgreen} onClick={() => first && onOpenRecord?.("income", first.id)} />; });
       case "banks":
         return (<>
           {[...banks, ...cardAccs].length === 0 && <EmptyRow text="حسابی ثبت نشده" />}
           {[...banks, ...cardAccs].map((a) => (
             <Row key={a.id} title={a.name} subtitle={a.type === "card" ? "کارت" : "بانک"} value={formatMoney(accountBalance(a.id), currency, usdRate)}
-              valueColor={accountBalance(a.id) >= 0 ? t.text : BRAND.crimson} />
+              valueColor={accountBalance(a.id) >= 0 ? t.text : BRAND.crimson} onClick={() => onOpenRecord?.("account", a.id)} />
           ))}
           <AddLink text="+ مدیریت حساب‌ها و کارت‌ها" onClick={openAccounts} />
         </>);
       case "funds":
-        return funds.length === 0 ? <EmptyRow text="صندوقی ثبت نشده" /> : funds.map((a) => <Row key={a.id} title={a.name} value={formatMoney(accountBalance(a.id), currency, usdRate)} valueColor={accountBalance(a.id) >= 0 ? t.text : BRAND.crimson} />);
+        return funds.length === 0 ? <EmptyRow text="صندوقی ثبت نشده" /> : funds.map((a) => <Row key={a.id} title={a.name} subtitle="لمس برای مشاهده سند حساب" value={formatMoney(accountBalance(a.id), currency, usdRate)} valueColor={accountBalance(a.id) >= 0 ? t.text : BRAND.crimson} onClick={() => onOpenRecord?.("fund", a.id)} />);
       case "balrep":
         return accounts.map((a) => (
           <Row key={a.id} title={a.name} subtitle={a.type === "bank" ? "بانک" : a.type === "card" ? "کارت" : "صندوق"}
-            value={formatMoney(accountBalance(a.id), currency, usdRate)} valueColor={accountBalance(a.id) >= 0 ? BRAND.darkgreen : BRAND.crimson} />
+            value={formatMoney(accountBalance(a.id), currency, usdRate)} valueColor={accountBalance(a.id) >= 0 ? BRAND.darkgreen : BRAND.crimson} onClick={() => onOpenRecord?.(a.type === "fund" ? "fund" : "account", a.id)} />
         ));
       case "budget":
         return (<>
@@ -2772,10 +2795,10 @@ function HomeView({
         return (<>
           {loans.length === 0 && checks.length === 0 && <EmptyRow text="موردی ثبت نشده" />}
           {loans.map((l) => (
-            <Row key={l.id} title={l.title} subtitle="وام" value={`${toFaInt(l.principal - (l.paidCount || 0) * l.monthlyPayment)} ریال باقی‌مانده`} valueColor={BRAND.crimson} />
+            <Row key={l.id} title={l.title} subtitle="وام · لمس برای مشاهده سند و اقساط" value={`${toFaInt(loanRemaining(l))} ریال باقی‌مانده`} valueColor={BRAND.crimson} onClick={() => onOpenRecord?.("loan", l.id)} />
           ))}
           {checks.filter((c) => c.status === "pending").map((c) => (
-            <Row key={c.id} title={`${c.payee} (${c.type === "received" ? "دریافتی" : "پرداختی"})`} subtitle={faLongDate(new Date(c.dueDate))} value={formatMoney(c.amount, currency, usdRate)} />
+            <Row key={c.id} title={`${c.payee} (${c.type === "received" ? "دریافتی" : "پرداختی"})`} subtitle={faLongDate(new Date(c.dueDate))} value={formatMoney(c.amount, currency, usdRate)} onClick={() => onOpenRecord?.("check", c.id)} />
           ))}
           <div style={{ display: "flex", gap: 14, justifyContent: "center", marginTop: 4 }}>
             <AddLink text="+ وام‌ها" onClick={openLoans} />
@@ -2784,15 +2807,15 @@ function HomeView({
           </div>
         </>);
       case "contacts":
-        return (<><Row title="اشخاص و طرف حساب‌ها" subtitle={`${toFaInt(persons.length)} نفر`} value="مدیریت" valueColor={BRAND.violet} onClick={openPersons} />
-          <Row title="بدهی و طلب" subtitle="مدیریت طرف حساب‌ها" value="مدیریت" valueColor={BRAND.orange} onClick={openDebts} /><Row title="طلب‌های باز" value={`${toFaInt(debts.filter((d) => !d.settled && d.kind === "receivable").reduce((s, d) => s + Number(d.amount || 0), 0))} ریال`} valueColor={BRAND.darkgreen} /><Row title="بدهی‌های باز" value={`${toFaInt(debts.filter((d) => !d.settled && d.kind === "payable").reduce((s, d) => s + Number(d.amount || 0), 0))} ریال`} valueColor={BRAND.crimson} /></>);
+        return (<><Row title="اشخاص و طرف حساب‌ها" subtitle={`${toFaInt(persons.length)} نفر`} value="مدیریت" valueColor={BRAND.violet} onClick={() => persons[0] ? onOpenRecord?.("person", persons[0].id) : openPersons?.()} />
+          <Row title="بدهی و طلب" subtitle="مدیریت طرف حساب‌ها" value="مدیریت" valueColor={BRAND.orange} onClick={() => debts[0] ? onOpenRecord?.("debt", debts[0].id) : openDebts?.()} /><Row title="طلب‌های باز" value={`${toFaInt(debts.filter((d) => !d.settled && d.kind === "receivable").reduce((s, d) => s + Number(d.amount || 0), 0))} ریال`} valueColor={BRAND.darkgreen} /><Row title="بدهی‌های باز" value={`${toFaInt(debts.filter((d) => !d.settled && d.kind === "payable").reduce((s, d) => s + Number(d.amount || 0), 0))} ریال`} valueColor={BRAND.crimson} /></>);
       case "bills":
         return (<>
           {bills.length === 0 && <EmptyRow text="قبضی ثبت نشده" />}
           {bills.map((b) => (
             <Row key={b.id} title={b.title} subtitle={faLongDate(new Date(b.dueDate))}
               value={b.paid ? "پرداخت شده" : `${toFaInt(daysUntil(b.dueDate))} روز`}
-              valueColor={b.paid ? BRAND.darkgreen : daysUntil(b.dueDate) < 0 ? BRAND.crimson : BRAND.orange} />
+              valueColor={b.paid ? BRAND.darkgreen : daysUntil(b.dueDate) < 0 ? BRAND.crimson : BRAND.orange} onClick={() => onOpenRecord?.("bill", b.id)} />
           ))}
           <AddLink text="+ مدیریت قبض‌ها" onClick={openBills} />
         </>);
@@ -3071,12 +3094,13 @@ function TransactionsView({ transactions, catById, accById, checks = [], filter,
 /* ---------------------------------------------------------
    Operations View
 --------------------------------------------------------- */
-function OperationsTransactionsManager({ transactions = [], categories = [], accounts = [], filterType = "all", updateTransaction, onDelete }) {
+function OperationsTransactionsManager({ transactions = [], categories = [], accounts = [], filterType = "all", updateTransaction, onDelete, focusId = null }) {
   const st = useStyles();
   const t = useT();
   const [expandedId, setExpandedId] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState(null);
+  useEffect(() => { if (focusId && transactions.some((x) => x.id === focusId)) setExpandedId(focusId); }, [focusId, transactions]);
   const catName = (id) => categories.find((c) => c.id === id)?.name || "بدون دسته";
   const accName = (id) => accounts.find((a) => a.id === id)?.name || "حساب نامشخص";
   const rows = [...transactions]
@@ -3813,29 +3837,29 @@ function ReportsView({ members = [], events = [], projects = [], loans = [], ass
    SubView Router
 --------------------------------------------------------- */
 const SUBVIEW_TITLES = { expenses: "هزینه‌ها", incomes: "درآمدها", cashboxes: "صندوق‌ها", cloud: "همگام‌سازی ابری (گیت‌هاب)", coa: "حساب‌ها", goals: "اهداف مالی و پس‌انداز", persons: "اشخاص و طرف حساب‌ها", debts: "بدهکاران و بستانکاران", currencies: "واحدهای پولی", calculator: "ماشین حساب", support: "پشتیبانی", shortcuts: "میانبرهای تراکنش", accounts: "حساب‌ها و کارت‌ها", categories: "حسابها", budgets: "بودجه‌بندی", recurring: "تراکنش‌های تکرارشونده", checks: "چک‌ها", loans: "وام و اقساط", bills: "یادآوری قبض‌ها", assets: "دارایی‌ها", calendar: "تقویم شمسی", settings: "تنظیمات و امنیت", profile: "ویرایش اطلاعات کاربری", backup: "پشتیبان‌گیری و بازیابی", access: "مدیریت دسترسی", basic: "تنظیمات پایه", tutorial: "آموزش Rexa", share: "ارسال برنامه به دیگران", rate: "امتیاز به برنامه", about: "درباره Rexa", tags: "اعضا، رویداد و پروژه", periods: "دوره مالی", sms: "پیامک بانکی", slip: "اسکن برگه پوز" };
-function SubViewContent({ subView, ctx, onBack }) {
+function SubViewContent({ subView, ctx, focusTarget, onBack }) {
   return (
     <div style={{ flex: 1, overflowY: "auto", padding: "20px 16px 112px", paddingTop: "calc(20px + env(safe-area-inset-top, 0px))" }}>
-      {subView === "expenses" && <OperationsTransactionsManager {...ctx} filterType="expense" onDelete={ctx.deleteTransaction} />}
-      {subView === "incomes" && <OperationsTransactionsManager {...ctx} filterType="income" onDelete={ctx.deleteTransaction} />}
-      {subView === "cashboxes" && <AccountsManager {...ctx} filterType="fund" />}
+      {subView === "expenses" && <OperationsTransactionsManager {...ctx} filterType="expense" focusId={focusTarget?.kind === "expense" ? focusTarget.id : null} onDelete={ctx.deleteTransaction} />}
+      {subView === "incomes" && <OperationsTransactionsManager {...ctx} filterType="income" focusId={focusTarget?.kind === "income" ? focusTarget.id : null} onDelete={ctx.deleteTransaction} />}
+      {subView === "cashboxes" && <AccountsManager {...ctx} filterType="fund" focusId={focusTarget?.kind === "fund" ? focusTarget.id : null} />}
       {subView === "goals" && <GoalsManager {...ctx} />}
       {subView === "coa" && <AccountsTree {...ctx} />}
       {subView === "cloud" && <CloudSyncView {...ctx} />}
-      {subView === "persons" && <PersonsManager {...ctx} />}
-      {subView === "debts" && <DebtsManager {...ctx} />}
+      {subView === "persons" && <PersonsManager {...ctx} focusId={focusTarget?.kind === "person" ? focusTarget.id : null} />}
+      {subView === "debts" && <DebtsManager {...ctx} focusId={focusTarget?.kind === "debt" ? focusTarget.id : null} />}
       {subView === "currencies" && <CurrenciesManager {...ctx} />}
       {subView === "calculator" && <CalculatorView {...ctx} />}
       {subView === "support" && <SupportView {...ctx} />}
       {subView === "shortcuts" && <ShortcutsManager {...ctx} />}
-      {subView === "accounts" && <AccountsManager {...ctx} />}
+      {subView === "accounts" && <AccountsManager {...ctx} focusId={focusTarget?.kind === "account" ? focusTarget.id : null} />}
       {subView === "categories" && <CategoriesManager {...ctx} />}
       {subView === "budgets" && <BudgetsManager {...ctx} />}
-      {subView === "recurring" && <RecurringManager {...ctx} />}
-      {subView === "checks" && <ChecksManager {...ctx} />}
-      {subView === "loans" && <LoansManager {...ctx} />}
-      {subView === "bills" && <BillsManager {...ctx} />}
-      {subView === "assets" && <AssetsManager {...ctx} />}
+      {subView === "recurring" && <RecurringManager {...ctx} focusId={focusTarget?.kind === "recurring" ? focusTarget.id : null} />}
+      {subView === "checks" && <ChecksManager {...ctx} focusId={focusTarget?.kind === "check" ? focusTarget.id : null} />}
+      {subView === "loans" && <LoansManager {...ctx} focusId={focusTarget?.kind === "loan" ? focusTarget.id : null} />}
+      {subView === "bills" && <BillsManager {...ctx} focusId={focusTarget?.kind === "bill" ? focusTarget.id : null} />}
+      {subView === "assets" && <AssetsManager {...ctx} focusId={focusTarget?.kind === "asset" ? focusTarget.id : null} />}
       {subView === "calendar" && <CalendarViewSub {...ctx} />}
       {subView === "settings" && <SettingsView {...ctx} />}
       {subView === "profile" && <ProfileView {...ctx} />}
@@ -3970,7 +3994,7 @@ function ShortcutsManager({ shortcuts, setShortcuts, categories, accounts }) {
   </div>;
 }
 
-function AccountsManager({ accounts, addAccount, deleteAccount, updateAccount, accountBalance, favorites, toggleFavorite, initialEditAccount, setAccountEditTarget, filterType = "all" }) {
+function AccountsManager({ accounts, addAccount, deleteAccount, updateAccount, accountBalance, favorites, toggleFavorite, initialEditAccount, setAccountEditTarget, filterType = "all", focusId = null }) {
   const st = useStyles();
   const [name, setName] = useState("");
   const [type, setType] = useState("bank");
@@ -3980,6 +4004,7 @@ function AccountsManager({ accounts, addAccount, deleteAccount, updateAccount, a
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState({ name: "", initial: "", cardNumber: "", expiryDate: "" });
   const [expandedId, setExpandedId] = useState(null);
+  useEffect(() => { if (focusId && accounts.some((a) => a.id === focusId)) setExpandedId(focusId); }, [focusId, accounts]);
 
   useEffect(() => {
     if (!initialEditAccount) return;
@@ -4194,10 +4219,11 @@ function BudgetRow({ category, budget, upsertBudget, st }) {
 /* ---------------------------------------------------------
    Recurring Manager
 --------------------------------------------------------- */
-function RecurringManager({ recurring, setRecurring, categories, accounts }) {
+function RecurringManager({ recurring, setRecurring, categories, accounts, focusId = null }) {
   const st = useStyles();
   const [form, setForm] = useState({ type: "expense", amount: "", categoryId: "", accountId: accounts[0]?.id || "", interval: "monthly", startDate: todayISO(), note: "" });
   const [expandedId, setExpandedId] = useState(null);
+  useEffect(() => { if (focusId && recurring.some((r) => r.id === focusId)) setExpandedId(focusId); }, [focusId, recurring]);
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState(null);
   const cats = categories.filter(c => c.kind === form.type);
@@ -4243,12 +4269,13 @@ function RecurringManager({ recurring, setRecurring, categories, accounts }) {
 /* ---------------------------------------------------------
    Checks Manager
 --------------------------------------------------------- */
-function ChecksManager({ checks, setChecks }) {
+function ChecksManager({ checks, setChecks, focusId = null }) {
   const st = useStyles();
   const [form, setForm] = useState({ type: "received", payee: "", amount: "", dueDate: todayISO(), note: "", sayadId: "", checkNumber: "" });
   const [expandedId, setExpandedId] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState(null);
+  useEffect(() => { if (focusId && checks.some((c) => c.id === focusId)) setExpandedId(focusId); }, [focusId, checks]);
   function add() {
     if (!form.payee || !form.amount || !form.checkNumber || form.sayadId.length < 16 || form.sayadId.length > 20) return;
     setChecks(p => [{ id: uid(), ...form, amount: Number(form.amount), status: "pending" }, ...p]);
@@ -4273,10 +4300,12 @@ function ChecksManager({ checks, setChecks }) {
 /* ---------------------------------------------------------
    Loans Manager
 --------------------------------------------------------- */
-function LoansManager({ loans, setLoans, categories = [], transactions = [], addTransaction, deleteTransaction }) {
+function LoansManager({ loans, setLoans, categories = [], transactions = [], addTransaction, deleteTransaction, focusId = null }) {
   const st = useStyles();
   const t = useT();
   const [form, setForm] = useState({ title: "", principal: "", installments: "", monthlyPayment: "", startDate: todayISO(), spent: false, accountId: "" });
+  const [expandedId, setExpandedId] = useState(null);
+  useEffect(() => { if (focusId && loans.some((l) => l.id === focusId)) setExpandedId(focusId); }, [focusId, loans]);
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState(null);
   const [accountOpen, setAccountOpen] = useState(false);
@@ -4411,7 +4440,7 @@ function LoansManager({ loans, setLoans, categories = [], transactions = [], add
           const remaining = Math.max(0, Number(l.principal || 0) - Number(l.paidCount || 0) * principalPerInstallment);
           const nextDue = addMonths(l.startDate, l.paidCount);
           return (
-            <div key={l.id} style={{ padding: "12px 4px", borderBottom: "1px solid #f0eef3" }}>
+            <div key={l.id} style={{ padding: "12px 4px", borderBottom: "1px solid #f0eef3", cursor: "pointer" }} onClick={() => setExpandedId(x => x === l.id ? null : l.id)}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
                 <span style={{ fontWeight: 700, fontSize: 14 }}>{l.title}{l.spent && <span style={{ marginRight: 8, fontSize: 10.5, fontWeight: 700, padding: "2px 8px", borderRadius: 10, background: "#f1eef4", color: "#6b6377" }}>خرج‌شده</span>}</span>
                 <div style={{ display: "flex", gap: 2 }}>
@@ -4428,6 +4457,16 @@ function LoansManager({ loans, setLoans, categories = [], transactions = [], add
                   {l.paidCount < l.installments && <button onClick={() => payLoan(l)} style={{ background: BRAND.green, color: "#fff", border: "none", borderRadius: 8, padding: "6px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>ثبت پرداخت قسط</button>}
                 </div>
               </div>
+              {expandedId === l.id && editingId !== l.id && <div style={{ background: "#f8f5fa", borderRadius: 12, padding: 10, marginTop: 10, fontSize: 12, lineHeight: 1.9 }}>
+                <div><b>اصل وام:</b> {toFaInt(l.principal)} ریال</div>
+                <div><b>مبلغ هر قسط:</b> {toFaInt(l.monthlyPayment)} ریال</div>
+                <div><b>تعداد اقساط:</b> {toFaInt(l.installments)}</div>
+                <div><b>پرداخت‌شده:</b> {toFaInt(l.paidCount || 0)} قسط</div>
+                <div><b>اصل باقی‌مانده:</b> {toFaInt(remaining)} ریال</div>
+                <div><b>هزینه مالی کل:</b> {toFaInt(totalInterest)} ریال</div>
+                <div><b>حساب:</b> {accountName(l.accountId)}</div>
+                <button onClick={(e) => { e.stopPropagation(); openEdit(l); }} style={{ ...st.primaryBtn, marginTop: 8, padding: "7px 12px", fontSize: 11.5 }}>ویرایش وام</button>
+              </div>}
               {editingId === l.id && editForm && <div style={{ background: "#f7f4fa", borderRadius: 12, padding: 10, marginTop: 10 }}>
                 <div style={{ fontWeight: 800, fontSize: 13, marginBottom: 8 }}>ویرایش وام / اقساط</div>
                 <input value={editForm.title} onChange={(e) => setEditForm({ ...editForm, title: e.target.value })} placeholder="عنوان وام" style={{ ...st.input, marginBottom: 7 }} />
@@ -4454,9 +4493,10 @@ function LoansManager({ loans, setLoans, categories = [], transactions = [], add
    Bills Manager
 --------------------------------------------------------- */
 const BILL_CATS = ["آب", "برق", "گاز", "اینترنت", "تلفن", "سایر"];
-function BillsManager({ bills, setBills }) {
+function BillsManager({ bills, setBills, focusId = null }) {
   const st = useStyles();
   const [form, setForm] = useState({ title: "آب", amount: "", dueDate: todayISO(), recurringMonthly: true });
+  useEffect(() => { if (focusId && bills.some((b) => b.id === focusId)) setExpandedId(focusId); }, [focusId, bills]);
   const [expandedId, setExpandedId] = useState(null); const [editingId, setEditingId] = useState(null); const [editForm, setEditForm] = useState(null);
   function add(){ if(!form.amount) return; setBills(p=>[...p,{id:uid(),...form,amount:Number(form.amount),paid:false}]);setForm(f=>({...f,amount:""})); }
   function beginEdit(b){setExpandedId(b.id);setEditingId(b.id);setEditForm({...b,amount:String(b.amount||"")});}
@@ -4475,7 +4515,7 @@ function AssetPriceEdit({ asset, setAssets, st }) {
     <AmountInput value={val} onChange={(v) => { setVal(v); setAssets((p) => p.map((x) => x.id === asset.id ? { ...x, currentPrice: Number(v || 0) } : x)); }} style={{ ...st.input, margin: 0, width: 110 }} />
   );
 }
-function AssetsManager({ assets, setAssets }) {
+function AssetsManager({ assets, setAssets, focusId = null }) {
   const [refreshing, setRefreshing] = useState(false);
   const st = useStyles();
   const [form, setForm] = useState({ kind: "crypto", symbol: "", quantity: "", avgPrice: "", currentPrice: "" });
@@ -5615,7 +5655,7 @@ function GoalsManager({ goals, setGoals }) {
   </div>;
 }
 
-function PersonsManager({ persons, setPersons }) {
+function PersonsManager({ persons, setPersons, focusId = null }) {
   const st = useStyles();
   const [form, setForm] = useState({ name: "", phone: "", note: "" });
   const [editing, setEditing] = useState(null);
@@ -5643,7 +5683,7 @@ function PersonsManager({ persons, setPersons }) {
   </div>;
 }
 
-function DebtsManager({ debts, setDebts, persons, accounts }) {
+function DebtsManager({ debts, setDebts, persons, accounts, focusId = null }) {
   const st = useStyles(); const [form,setForm]=useState({personId:"",kind:"receivable",amount:"",dueDate:todayISO(),note:""}); const [expandedId,setExpandedId]=useState(null); const [editingId,setEditingId]=useState(null); const [editForm,setEditForm]=useState(null);
   function add(){const amount=Number(form.amount||0);if(!form.personId||!amount)return;setDebts(p=>[{id:uid(),...form,amount,settled:false},...p]);setForm({personId:"",kind:"receivable",amount:"",dueDate:todayISO(),note:""});}
   function beginEdit(d){setExpandedId(d.id);setEditingId(d.id);setEditForm({...d,amount:String(d.amount||"")});}
