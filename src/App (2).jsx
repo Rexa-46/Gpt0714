@@ -2751,9 +2751,9 @@ function HomeView({
         </>);
       }
       case "expense":
-        return expenseByCategory.length === 0 ? <EmptyRow text="هزینه‌ای ثبت نشده" /> : expenseByCategory.map((e) => { const first = allTransactions.find((tx) => tx.type === "expense" && tx.categoryId === e.catId); return <Row key={e.catId} title={e.name} subtitle="لمس برای مشاهده سندهای این دسته" value={formatMoney(e.amount, currency, usdRate)} valueColor={BRAND.crimson} onClick={() => first && onOpenRecord?.("expense", first.id)} />; });
+        return expenseByCategory.length === 0 ? <EmptyRow text="هزینه‌ای ثبت نشده" /> : expenseByCategory.map((e) => { const first = allTransactions.find((tx) => tx.type === "expense" && tx.categoryId === e.catId); return <Row key={e.catId} title={e.name} value={formatMoney(e.amount, currency, usdRate)} valueColor={BRAND.crimson} onClick={() => first ? onOpenRecord?.("expense", first.id) : undefined} />; });
       case "income":
-        return incomeByCategory.length === 0 ? <EmptyRow text="درآمدی ثبت نشده" /> : incomeByCategory.map((e) => { const first = allTransactions.find((tx) => tx.type === "income" && tx.categoryId === e.catId); return <Row key={e.catId} title={e.name} subtitle="لمس برای مشاهده سندهای این دسته" value={formatMoney(e.amount, currency, usdRate)} valueColor={BRAND.darkgreen} onClick={() => first && onOpenRecord?.("income", first.id)} />; });
+        return incomeByCategory.length === 0 ? <EmptyRow text="درآمدی ثبت نشده" /> : incomeByCategory.map((e) => { const first = allTransactions.find((tx) => tx.type === "income" && tx.categoryId === e.catId); return <Row key={e.catId} title={e.name} value={formatMoney(e.amount, currency, usdRate)} valueColor={BRAND.darkgreen} onClick={() => first ? onOpenRecord?.("income", first.id) : undefined} />; });
       case "banks":
         return (<>
           {[...banks, ...cardAccs].length === 0 && <EmptyRow text="حسابی ثبت نشده" />}
@@ -2764,7 +2764,7 @@ function HomeView({
           <AddLink text="+ مدیریت حساب‌ها و کارت‌ها" onClick={openAccounts} />
         </>);
       case "funds":
-        return funds.length === 0 ? <EmptyRow text="صندوقی ثبت نشده" /> : funds.map((a) => <Row key={a.id} title={a.name} subtitle="لمس برای مشاهده سند حساب" value={formatMoney(accountBalance(a.id), currency, usdRate)} valueColor={accountBalance(a.id) >= 0 ? t.text : BRAND.crimson} onClick={() => onOpenRecord?.("fund", a.id)} />);
+        return funds.length === 0 ? <EmptyRow text="صندوقی ثبت نشده" /> : funds.map((a) => <Row key={a.id} title={a.name} value={formatMoney(accountBalance(a.id), currency, usdRate)} valueColor={accountBalance(a.id) >= 0 ? t.text : BRAND.crimson} onClick={() => onOpenRecord?.("fund", a.id)} />);
       case "balrep":
         return accounts.map((a) => (
           <Row key={a.id} title={a.name} subtitle={a.type === "bank" ? "بانک" : a.type === "card" ? "کارت" : "صندوق"}
@@ -2795,7 +2795,7 @@ function HomeView({
         return (<>
           {loans.length === 0 && checks.length === 0 && <EmptyRow text="موردی ثبت نشده" />}
           {loans.map((l) => (
-            <Row key={l.id} title={l.title} subtitle="وام · لمس برای مشاهده سند و اقساط" value={`${toFaInt(loanRemaining(l))} ریال باقی‌مانده`} valueColor={BRAND.crimson} onClick={() => onOpenRecord?.("loan", l.id)} />
+            <Row key={l.id} title={l.title} subtitle="وام" value={`${toFaInt(loanRemaining(l))} ریال باقی‌مانده`} valueColor={BRAND.crimson} onClick={() => onOpenRecord?.("loan", l.id)} />
           ))}
           {checks.filter((c) => c.status === "pending").map((c) => (
             <Row key={c.id} title={`${c.payee} (${c.type === "received" ? "دریافتی" : "پرداختی"})`} subtitle={faLongDate(new Date(c.dueDate))} value={formatMoney(c.amount, currency, usdRate)} onClick={() => onOpenRecord?.("check", c.id)} />
@@ -2972,7 +2972,7 @@ function TransactionSummaryChart({ transactions, onSelect }) {
       <div style={{ background: detail.type === "income" ? "#eef8f1" : "#fff0f3", borderRadius: 10, padding: 10, textAlign: "center", fontSize: 12.5, fontWeight: 700, color: detail.type === "income" ? BRAND.darkgreen : BRAND.crimson }}>
         {detail.name}: {toFaInt(detail.amount)} ریال · {toFaInt(detail.count)} تراکنش
       </div>
-    ) : <div style={{ textAlign: "center", color: t.sub, fontSize: 11.5 }}>روی ستون درآمد یا هزینه لمس کن تا جزئیات و همان موارد را ببینی.</div>}
+    ) : <div style={{ textAlign: "center", color: t.sub, fontSize: 11.5 }}>—</div>}
   </div>;
 }
 
@@ -3123,7 +3123,6 @@ function OperationsTransactionsManager({ transactions = [], categories = [], acc
   return <div>
     <div style={{ ...st.card, padding: 12, marginBottom: 12 }}>
       <div style={{ fontWeight: 800, fontSize: 14 }}>{filterType === "expense" ? "هزینه‌ها" : filterType === "income" ? "درآمدها" : "همه تراکنش‌ها"}</div>
-      <div style={{ fontSize: 11.5, color: t.sub, marginTop: 5 }}>روی هر مورد بزن؛ فقط همان مورد جزئیاتش را باز می‌کند.</div>
     </div>
     <div style={{ ...st.card, padding: "4px 12px" }}>
       {!rows.length && <EmptyRow text="موردی ثبت نشده" />}
@@ -3186,7 +3185,7 @@ function OperationsView({ setSubView, onAdd }) {
     { title: "تنظیمات و پشتیبان‌گیری", icon: <ShieldCheck size={17} />, color: "#555", key: "settings" },
   ];
   return <div style={{ padding: "10px 16px" }}><div style={{ ...st.card, padding: "4px 12px" }}>
-    {items.map((it) => <Row key={it.key} title={it.title} subtitle="مشاهده جزئیات، ویرایش و مدیریت" leftIcon={it.icon} leftColor={it.color} onClick={() => setSubView(it.key)} />)}
+    {items.map((it) => <Row key={it.key} title={it.title} leftIcon={it.icon} leftColor={it.color} onClick={() => setSubView(it.key)} />)}
     <Row title="ثبت تراکنش جدید" leftIcon={<Plus size={17} />} leftColor={BRAND.fab} onClick={onAdd} />
   </div></div>;
 }
@@ -3772,14 +3771,14 @@ function ReportsView({ members = [], events = [], projects = [], loans = [], ass
 
       <SectionTitle text="گزارش مانده حساب‌ها" />
       <div style={{ ...st.card, padding: "4px 12px", marginBottom: expenseByMember?.length || expenseByEvent?.length || expenseByProject?.length ? 18 : 0 }}>
-        {accounts.map((a) => <Row key={a.id} title={a.name} subtitle={`${a.type === "bank" ? "بانک" : a.type === "card" ? "کارت" : "صندوق"} · لمس برای جزئیات`} value={formatMoney(accountBalance(a.id), currency, usdRate)} valueColor={accountBalance(a.id) >= 0 ? BRAND.darkgreen : BRAND.crimson} onClick={() => { setSelectedAccount(a); setEditBalance(String(accountBalance(a.id))); }} />)}
+        {accounts.map((a) => <Row key={a.id} title={a.name} subtitle={a.type === "bank" ? "بانک" : a.type === "card" ? "کارت" : "صندوق"} value={formatMoney(accountBalance(a.id), currency, usdRate)} valueColor={accountBalance(a.id) >= 0 ? BRAND.darkgreen : BRAND.crimson} onClick={() => { setSelectedAccount(a); setEditBalance(String(accountBalance(a.id))); }} />)}
       </div>
 
       {expenseByMember?.length > 0 && (
         <>
           <SectionTitle text="گزارش هزینه به‌تفکیک اعضای خانواده" />
           <div style={{ ...st.card, padding: "4px 12px", marginBottom: 18 }}>
-            {expenseByMember.map((m) => <Row key={m.id} title={m.name} subtitle="لمس برای مشاهده ریز هزینه‌ها" value={formatMoney(m.amount, currency, usdRate)} valueColor={BRAND.crimson} onClick={() => setSelectedMember(m)} />)}
+            {expenseByMember.map((m) => <Row key={m.id} title={m.name} value={formatMoney(m.amount, currency, usdRate)} valueColor={BRAND.crimson} onClick={() => setSelectedMember(m)} />)}
           </div>
         </>
       )}
