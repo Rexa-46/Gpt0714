@@ -4251,6 +4251,7 @@ function AccountAveragePanel({ account, transactions = [], accountBalance, onClo
 
 function AccountsManager({ accounts, addAccount, deleteAccount, updateAccount, accountBalance, favorites, toggleFavorite, initialEditAccount, setAccountEditTarget, transactions = [] }) {
   const st = useStyles();
+  const t = useT();
   const [name, setName] = useState("");
   const [type, setType] = useState("bank");
   const [initial, setInitial] = useState("");
