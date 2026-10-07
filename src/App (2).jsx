@@ -2116,6 +2116,7 @@ export default function App() {
   const [showReminderModal, setShowReminderModal] = useState(false);
   const [showCapture, setShowCapture] = useState(false);
   const [accountEditTarget, setAccountEditTarget] = useState(null);
+  const [focusId, setFocusId] = useState(null);   // رکوردی که از صفحه اصلی انتخاب شده و باید در مدیر هر بخش باز شود
   const [rates, setRates] = useState(null); // { usd: rialsPerUsd, fetchedAt }
   const [shortcuts, setShortcuts] = useState(() => settings.shortcuts || []);
   const tapTimesRef = useRef([]);
@@ -2542,7 +2543,7 @@ export default function App() {
 
 
   const ctx = {
-    accounts, addAccount, deleteAccount, updateAccount, accountBalance, accountEditTarget, setAccountEditTarget,
+    accounts, addAccount, deleteAccount, updateAccount, accountBalance, accountEditTarget, setAccountEditTarget, focusId, setFocusId,
     categories, addCategory, deleteCategory, updateCategory,
     budgets, upsertBudget, expenseByCategory, incomeByCategory,
     loans, setLoans, checks, setChecks, bills, setBills, assets, setAssets,
@@ -2615,6 +2616,10 @@ export default function App() {
                 onRunShortcut={(sc) => { setShowQuickAdd(false); setShowAdd(true); setPrefillTx({ type: sc.type, categoryId: sc.categoryId, accountId: sc.accountId, note: sc.note || `میانبر: ${sc.name}` }); }}
                 openShortcuts={() => setSubView("shortcuts")}
                 onOpenTransactions={() => setTab("transactions")}
+                onOpenItem={(view, id) => { setFocusId(id); setSubView(view); }}
+                onEditTransaction={(tx) => { setPrefillTx({ ...tx, _editId: tx.id }); setShowAdd(true); }}
+                onDeleteTransaction={deleteTransaction}
+                onDeleteAccount={deleteAccount}
                 onAddTransaction={(type) => { setPrefillTx(type ? { type } : null); setShowAdd(true); }}
               />
             )}
@@ -2706,14 +2711,47 @@ export default function App() {
 /* ---------------------------------------------------------
    Home View
 --------------------------------------------------------- */
+/* ---------------------------------------------------------
+   Home detail helpers (سند باز‌شونده در صفحه اصلی)
+--------------------------------------------------------- */
+function DetailBox({ lines = [], children }) {
+  const t = useT();
+  return (
+    <div style={{ margin: "2px 0 10px", padding: 12, borderRadius: 12, background: "rgba(127,127,127,0.08)", border: `1px solid ${t.border}`, fontSize: 12 }}>
+      {lines.map(([k, v]) => (
+        <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "6px 0", borderBottom: `1px solid ${t.border}` }}>
+          <span style={{ color: t.sub }}>{k}</span>
+          <strong style={{ color: t.text, textAlign: "left", wordBreak: "break-word" }}>{v}</strong>
+        </div>
+      ))}
+      {children}
+    </div>
+  );
+}
+const detailActionBtn = (color, filled) => ({ flex: 1, border: filled ? "none" : `1px solid ${color}`, background: filled ? color : "transparent", color: filled ? "#fff" : color, borderRadius: 9, padding: "8px 10px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" });
+// بعد از رفتن به مدیر هر بخش، رکورد انتخاب‌شده را باز و به آن اسکرول می‌کند
+function useFocusItem(focusId, setFocusId, openFn) {
+  useEffect(() => {
+    if (!focusId) return;
+    openFn(focusId);
+    setTimeout(() => { try { document.getElementById(`item-${focusId}`)?.scrollIntoView({ behavior: "smooth", block: "center" }); } catch {} }, 150);
+    setFocusId?.(null);
+  }, [focusId]);
+}
+
 function HomeView({
   year, setYear, totalIncomeYear, totalExpenseYear, gaugeMax, open, toggle,
   accounts, accountBalance, expenseByCategory, incomeByCategory, budgets, categories,
   transactions, allTransactions, bills, loans, checks, assets, totalAssets, persons = [], debts = [],
   openAccounts, onEditAccount, openBudgets, openBills, openLoans, openChecks, openAssets, openPersons, openDebts, openSubView,
-  homeDay, setHomeDay, catById, settings, setSettings, rates, fetchRates, onNote, onReminder, onAddTransaction, shortcuts = [], onRunShortcut, openShortcuts, onOpenTransactions
+  homeDay, setHomeDay, catById, settings, setSettings, rates, fetchRates, onNote, onReminder, onAddTransaction, shortcuts = [], onRunShortcut, openShortcuts, onOpenTransactions,
+  onOpenItem, onEditTransaction, onDeleteTransaction, onDeleteAccount
 }) {
   const t = useT();
+  const [openItem, setOpenItem] = useState(null);   // فقط یک سطر همزمان باز است
+  const [openTxId, setOpenTxId] = useState(null);   // فقط یک سند داخل سطر باز است
+  const toggleItem = (k) => { setOpenTxId(null); setOpenItem((o) => (o === k ? null : k)); };
+  const accNameOf = (id) => accounts.find((a) => a.id === id)?.name || "—";
   const banks = accounts.filter((a) => a.type === "bank");
   const funds = accounts.filter((a) => a.type === "fund");
   const cardAccs = accounts.filter((a) => a.type === "card");
@@ -2737,6 +2775,97 @@ function HomeView({
     contacts: { color: BRAND.violet, title: "اشخاص و بدهی ها", icon: <Users size={20} /> },
     bills: { color: BRAND.crimson, title: "یادآوری قبض ها", icon: <BellRing size={20} /> },
   };
+
+  function txSourceOf(tx) {
+    if (tx.loanId) return ["loans", tx.loanId, "وام"];
+    if (tx.checkId) return ["checks", tx.checkId, "چک"];
+    if (tx.billId) return ["bills", tx.billId, "قبض"];
+    if (tx.sourceType === "debt" && tx.sourceId) return ["debts", tx.sourceId, "بدهی/طلب"];
+    return null;
+  }
+  function categoryDocs(kind, color) {
+    const list = kind === "expense" ? expenseByCategory : incomeByCategory;
+    if (list.length === 0) return <EmptyRow text={kind === "expense" ? "هزینه‌ای ثبت نشده" : "درآمدی ثبت نشده"} />;
+    return list.map((e) => {
+      const k = `${kind}:${e.catId}`;
+      const isOpen = openItem === k;
+      const txs = isOpen
+        ? transactions.filter((x) => x.type === kind && isPnlTransaction(x) && String(x.categoryId) === String(e.catId))
+            .sort((a, b) => `${b.date}${b.time || ""}`.localeCompare(`${a.date}${a.time || ""}`))
+        : [];
+      return (
+        <div key={e.catId}>
+          <Row title={e.name} subtitle={isOpen ? `${toFaInt(txs.length)} سند` : "لمس برای مشاهده سندها"} value={formatMoney(e.amount, currency, usdRate)} valueColor={color}
+            onClick={() => toggleItem(k)} chevron={isOpen ? "right" : "left"} />
+          {isOpen && (
+            <div style={{ margin: "0 0 8px", paddingRight: 8 }}>
+              {txs.length === 0 && <EmptyRow text="سندی یافت نشد" />}
+              {txs.map((x) => {
+                const txOpen = openTxId === x.id;
+                const src = txSourceOf(x);
+                const pnl = pnlAmount(x);
+                const lines = [
+                  ["مبلغ", formatMoney(x.amount, currency, usdRate)],
+                  ...(Number(pnl) !== Number(x.amount) ? [[kind === "expense" ? "سهم در هزینه" : "سهم در درآمد", formatMoney(pnl, currency, usdRate)]] : []),
+                  ["تاریخ", `${x.date ? faLongDate(new Date(x.date)) : "—"}${x.time ? ` · ${faDigits(x.time)}` : ""}`],
+                  ["دسته", e.name],
+                  ["حساب", accNameOf(x.accountId)],
+                  ["توضیحات", x.note || "—"],
+                ];
+                return (
+                  <div key={x.id}>
+                    <Row title={x.note || e.name} subtitle={x.date ? faLongDate(new Date(x.date)) : undefined} value={formatMoney(pnl, currency, usdRate)} valueColor={color}
+                      onClick={() => setOpenTxId((o) => (o === x.id ? null : x.id))} chevron={txOpen ? "right" : "left"} />
+                    {txOpen && (
+                      <DetailBox lines={lines}>
+                        <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                          {src ? (
+                            <button onClick={() => onOpenItem?.(src[0], src[1])} style={detailActionBtn(BRAND.violet, true)}>مدیریت از بخش {src[2]}</button>
+                          ) : (<>
+                            <button onClick={() => onEditTransaction?.(x)} style={detailActionBtn(BRAND.violet, true)}>ویرایش</button>
+                            <button onClick={() => { if (window.confirm("این تراکنش حذف شود؟")) { onDeleteTransaction?.(x.id); setOpenTxId(null); } }} style={detailActionBtn(BRAND.crimson, false)}>حذف</button>
+                          </>)}
+                        </div>
+                        {src && <div style={{ fontSize: 11, color: t.sub, marginTop: 8, lineHeight: 1.8 }}>این سند از بخش {src[2]} ساخته شده و برای حفظ صحت حساب‌ها فقط از همان بخش قابل اصلاح است.</div>}
+                      </DetailBox>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      );
+    });
+  }
+  function accountDoc(a) {
+    const k = `acc:${a.id}`;
+    const isOpen = openItem === k;
+    const bal = accountBalance(a.id);
+    const typeLabel = a.type === "card" ? "کارت" : a.type === "bank" ? "بانک" : "صندوق";
+    const lines = [
+      ["نوع", typeLabel],
+      ["موجودی فعلی", formatMoney(bal, currency, usdRate)],
+      ["موجودی اولیه", formatMoney(a.initial || 0, currency, usdRate)],
+      ...(a.cardNumber ? [["شماره کارت", <span dir="ltr">{String(a.cardNumber).replace(/(\d{4})(?=\d)/g, "$1 ")}</span>]] : a.cardNumberLast4 ? [["شماره کارت", <span dir="ltr">•••• {a.cardNumberLast4}</span>]] : []),
+      ...(a.expiryDate ? [["تاریخ انقضا", <span dir="ltr">{expiryFromStored(a.expiryDate)}</span>]] : []),
+      ["وضعیت", a.active === false ? "بایگانی‌شده" : "فعال"],
+    ];
+    return (
+      <div key={a.id}>
+        <Row title={a.name} subtitle={isOpen ? typeLabel : `${typeLabel} · لمس برای جزئیات`} value={formatMoney(bal, currency, usdRate)} valueColor={bal >= 0 ? t.text : BRAND.crimson}
+          onClick={() => toggleItem(k)} chevron={isOpen ? "right" : "left"} />
+        {isOpen && (
+          <DetailBox lines={lines}>
+            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+              <button onClick={() => onEditAccount?.(a)} style={detailActionBtn(BRAND.violet, true)}>ویرایش</button>
+              <button onClick={() => { if (window.confirm(`«${a.name}» حذف شود؟ اگر سابقه مالی داشته باشد به‌جای حذف، بایگانی می‌شود.`)) { onDeleteAccount?.(a.id); setOpenItem(null); } }} style={detailActionBtn(BRAND.crimson, false)}>حذف / بایگانی</button>
+            </div>
+          </DetailBox>
+        )}
+      </div>
+    );
+  }
 
   function sectionBody(key) {
     switch (key) {
@@ -2783,20 +2912,17 @@ function HomeView({
         </>);
       }
       case "expense":
-        return expenseByCategory.length === 0 ? <EmptyRow text="هزینه‌ای ثبت نشده" /> : expenseByCategory.map((e) => <Row key={e.catId} title={e.name} value={formatMoney(e.amount, currency, usdRate)} valueColor={BRAND.crimson} />);
+        return categoryDocs("expense", BRAND.crimson);
       case "income":
-        return incomeByCategory.length === 0 ? <EmptyRow text="درآمدی ثبت نشده" /> : incomeByCategory.map((e) => <Row key={e.catId} title={e.name} value={formatMoney(e.amount, currency, usdRate)} valueColor={BRAND.darkgreen} />);
+        return categoryDocs("income", BRAND.darkgreen);
       case "banks":
         return (<>
           {[...banks, ...cardAccs].length === 0 && <EmptyRow text="حسابی ثبت نشده" />}
-          {[...banks, ...cardAccs].map((a) => (
-            <Row key={a.id} title={a.name} subtitle={a.type === "card" ? "کارت" : "بانک"} value={formatMoney(accountBalance(a.id), currency, usdRate)}
-              valueColor={accountBalance(a.id) >= 0 ? t.text : BRAND.crimson} />
-          ))}
+          {[...banks, ...cardAccs].map((a) => accountDoc(a))}
           <AddLink text="+ مدیریت حساب‌ها و کارت‌ها" onClick={openAccounts} />
         </>);
       case "funds":
-        return funds.length === 0 ? <EmptyRow text="صندوقی ثبت نشده" /> : funds.map((a) => <Row key={a.id} title={a.name} value={formatMoney(accountBalance(a.id), currency, usdRate)} valueColor={accountBalance(a.id) >= 0 ? t.text : BRAND.crimson} />);
+        return funds.length === 0 ? <EmptyRow text="صندوقی ثبت نشده" /> : funds.map((a) => accountDoc(a));
       case "balrep":
         return accounts.map((a) => (
           <Row key={a.id} title={a.name} subtitle={a.type === "bank" ? "بانک" : a.type === "card" ? "کارت" : "صندوق"}
@@ -2827,10 +2953,10 @@ function HomeView({
         return (<>
           {loans.length === 0 && checks.length === 0 && <EmptyRow text="موردی ثبت نشده" />}
           {loans.map((l) => (
-            <Row key={l.id} title={l.title} subtitle="وام" value={`${toFaInt(l.principal - (l.paidCount || 0) * l.monthlyPayment)} ریال باقی‌مانده`} valueColor={BRAND.crimson} />
+            <Row key={l.id} title={l.title} subtitle="وام" value={`${toFaInt(l.principal - (l.paidCount || 0) * l.monthlyPayment)} ریال باقی‌مانده`} valueColor={BRAND.crimson} onClick={() => onOpenItem?.("loans", l.id)} />
           ))}
           {checks.filter((c) => c.status === "pending").map((c) => (
-            <Row key={c.id} title={`${c.payee} (${c.type === "received" ? "دریافتی" : "پرداختی"})`} subtitle={faLongDate(new Date(c.dueDate))} value={formatMoney(c.amount, currency, usdRate)} />
+            <Row key={c.id} title={`${c.payee} (${c.type === "received" ? "دریافتی" : "پرداختی"})`} subtitle={faLongDate(new Date(c.dueDate))} value={formatMoney(c.amount, currency, usdRate)} onClick={() => onOpenItem?.("checks", c.id)} />
           ))}
           <div style={{ display: "flex", gap: 14, justifyContent: "center", marginTop: 4 }}>
             <AddLink text="+ وام‌ها" onClick={openLoans} />
@@ -2840,14 +2966,14 @@ function HomeView({
         </>);
       case "contacts":
         return (<><Row title="اشخاص و طرف حساب‌ها" subtitle={`${toFaInt(persons.length)} نفر`} value="مدیریت" valueColor={BRAND.violet} onClick={openPersons} />
-          <Row title="بدهی و طلب" subtitle="مدیریت طرف حساب‌ها" value="مدیریت" valueColor={BRAND.orange} onClick={openDebts} /><Row title="طلب‌های باز" value={`${toFaInt(debts.filter((d) => !d.settled && d.kind === "receivable").reduce((s, d) => s + Number(d.amount || 0), 0))} ریال`} valueColor={BRAND.darkgreen} /><Row title="بدهی‌های باز" value={`${toFaInt(debts.filter((d) => !d.settled && d.kind === "payable").reduce((s, d) => s + Number(d.amount || 0), 0))} ریال`} valueColor={BRAND.crimson} /></>);
+          <Row title="بدهی و طلب" subtitle="مدیریت طرف حساب‌ها" value="مدیریت" valueColor={BRAND.orange} onClick={openDebts} />{debts.filter((d) => !d.settled).map((d) => <Row key={d.id} title={persons.find((p) => p.id === d.personId)?.name || "طرف حساب حذف‌شده"} subtitle={d.kind === "receivable" ? "طلب" : "بدهی"} value={`${toFaInt(d.amount)} ریال`} valueColor={d.kind === "receivable" ? BRAND.darkgreen : BRAND.crimson} onClick={() => onOpenItem?.("debts", d.id)} />)}<Row title="طلب‌های باز" value={`${toFaInt(debts.filter((d) => !d.settled && d.kind === "receivable").reduce((s, d) => s + Number(d.amount || 0), 0))} ریال`} valueColor={BRAND.darkgreen} /><Row title="بدهی‌های باز" value={`${toFaInt(debts.filter((d) => !d.settled && d.kind === "payable").reduce((s, d) => s + Number(d.amount || 0), 0))} ریال`} valueColor={BRAND.crimson} /></>);
       case "bills":
         return (<>
           {bills.length === 0 && <EmptyRow text="قبضی ثبت نشده" />}
           {bills.map((b) => (
             <Row key={b.id} title={b.title} subtitle={faLongDate(new Date(b.dueDate))}
               value={b.paid ? "پرداخت شده" : `${toFaInt(daysUntil(b.dueDate))} روز`}
-              valueColor={b.paid ? BRAND.darkgreen : daysUntil(b.dueDate) < 0 ? BRAND.crimson : BRAND.orange} />
+              valueColor={b.paid ? BRAND.darkgreen : daysUntil(b.dueDate) < 0 ? BRAND.crimson : BRAND.orange} onClick={() => onOpenItem?.("bills", b.id)} />
           ))}
           <AddLink text="+ مدیریت قبض‌ها" onClick={openBills} />
         </>);
@@ -4401,9 +4527,10 @@ function RecurringManager({ recurring, setRecurring, categories, accounts }) {
 /* ---------------------------------------------------------
    Checks Manager
 --------------------------------------------------------- */
-function ChecksManager({ checks, setChecks, accounts = [], setTransactions }) {
+function ChecksManager({ checks, setChecks, accounts = [], setTransactions, focusId, setFocusId }) {
   const st = useStyles();
   const [expandedId, setExpandedId] = useState(null);
+  useFocusItem(focusId, setFocusId, setExpandedId);
   const [form, setForm] = useState({ type: "received", payee: "", amount: "", dueDate: todayISO(), note: "", sayadId: "", checkNumber: "", accountId: "" });
   function add() {
     if (!form.payee || !form.amount || !form.checkNumber || form.sayadId.length < 16 || form.sayadId.length > 20) return;
@@ -4455,7 +4582,7 @@ function ChecksManager({ checks, setChecks, accounts = [], setTransactions }) {
           const d = daysUntil(c.dueDate);
           const urgent = c.status === "pending" && d <= 7;
           return (
-          <div key={c.id} style={{ padding: "12px 4px", borderBottom: "1px solid #f0eef3" }}>
+          <div key={c.id} id={`item-${c.id}`} style={{ padding: "12px 4px", borderBottom: "1px solid #f0eef3" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
               <span style={{ fontWeight: 700, fontSize: 14 }}>{c.payee} ({c.type === "received" ? "دریافتی" : "پرداختی"})</span>
               <span style={{ fontWeight: 700 }}>{toFaInt(c.amount)} ریال</span>
@@ -4531,9 +4658,10 @@ const loanInstallmentTx = (l, seq) => {
   const principalPart = Math.max(0, Number(l.monthlyPayment || 0) - interestPerInstallment);
   return { id: uid(), type: "expense", amount: l.monthlyPayment, pnlAmount: interestPerInstallment, categoryId: LOAN_CAT_INSTALL, accountId: l.accountId, date: todayISO(), time: new Date().toTimeString().slice(0, 5), note: `قسط ${seq} از ${l.installments} وام «${l.title}»`, tags: ["وام", "قسط"], loanId: l.id, loanRole: "installment", loanSeq: seq, isFinancing: true, principalPart, interestPart: interestPerInstallment, sourceType: "loan_installment", sourceId: `${l.id}:${seq}`, contraAccount: "ledger:loan-liability", createdAt: new Date().toISOString() };
 };
-function LoansManager({ loans, setLoans, accounts = [], categories = [], addCategory, setTransactions }) {
+function LoansManager({ loans, setLoans, accounts = [], categories = [], addCategory, setTransactions, focusId, setFocusId }) {
   const st = useStyles();
   const [expandedId, setExpandedId] = useState(null);
+  useFocusItem(focusId, setFocusId, setExpandedId);
   const emptyForm = () => ({ title: "", principal: "", installments: "", monthlyPayment: "", startDate: todayISO(), spent: false, accountId: "" });
   const [form, setForm] = useState(emptyForm());
   const [editingId, setEditingId] = useState(null);
@@ -4617,7 +4745,7 @@ function LoansManager({ loans, setLoans, accounts = [], categories = [], addCate
           const remaining = l.principal - l.paidCount * l.monthlyPayment;
           const nextDue = addMonths(l.startDate, l.paidCount);
           return (
-            <div key={l.id} style={{ padding: "12px 4px", borderBottom: "1px solid #f0eef3" }}>
+            <div key={l.id} id={`item-${l.id}`} style={{ padding: "12px 4px", borderBottom: "1px solid #f0eef3" }}>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
                 <span style={{ fontWeight: 700, fontSize: 14 }}>{l.title}{l.spent && <span style={{ marginRight: 8, fontSize: 10.5, fontWeight: 700, padding: "2px 8px", borderRadius: 10, background: "#f1eef4", color: "#6b6377" }}>خرج‌شده</span>}</span>
                 <span style={{ display: "flex", gap: 4 }}>
@@ -4675,8 +4803,10 @@ function LoansManager({ loans, setLoans, accounts = [], categories = [], addCate
    Bills Manager
 --------------------------------------------------------- */
 const BILL_CATS = ["آب", "برق", "گاز", "اینترنت", "تلفن", "سایر"];
-function BillsManager({ bills, setBills, accounts = [], setTransactions }) {
+function BillsManager({ bills, setBills, accounts = [], setTransactions, focusId, setFocusId }) {
   const st = useStyles();
+  const [expandedId, setExpandedId] = useState(null);
+  useFocusItem(focusId, setFocusId, setExpandedId);
   const [form, setForm] = useState({ title: "آب", amount: "", dueDate: todayISO(), recurringMonthly: true, accountId: "" });
   function add() {
     setBills((p) => [...p, { id: uid(), title: form.title, amount: Number(form.amount || 0), dueDate: form.dueDate, recurringMonthly: form.recurringMonthly, accountId: form.accountId || "", paid: false, createdAt: new Date().toISOString() }]);
@@ -4710,7 +4840,8 @@ function BillsManager({ bills, setBills, accounts = [], setTransactions }) {
         {[...bills].sort((a, b) => a.dueDate.localeCompare(b.dueDate)).map((b) => {
           const d = daysUntil(b.dueDate);
           return (
-            <div key={b.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 4px", borderBottom: "1px solid #f0eef3" }}>
+            <div key={b.id} id={`item-${b.id}`}>
+            <div onClick={() => setExpandedId(expandedId === b.id ? null : b.id)} style={{ cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 4px", borderBottom: "1px solid #f0eef3" }}>
               <div>
                 <div style={{ fontWeight: 700, fontSize: 14 }}>{b.title}{b.amount ? ` — ${toFaInt(b.amount)} ریال` : ""}</div>
                 <div style={{ fontSize: 12, color: b.paid ? BRAND.darkgreen : d < 0 ? BRAND.crimson : "#8a8194" }}>
@@ -4718,9 +4849,20 @@ function BillsManager({ bills, setBills, accounts = [], setTransactions }) {
                 </div>
               </div>
               <div style={{ display: "flex", gap: 8 }}>
-                {!b.paid && <button onClick={() => markPaid(b)} style={{ background: BRAND.green, color: "#fff", border: "none", borderRadius: 8, padding: "6px 10px", fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}>ثبت پرداخت</button>}
-                <button onClick={() => { setBills((p) => p.filter((x) => x.id !== b.id)); setTransactions?.((p) => p.filter((t) => !(t.sourceType === "bill" && (t.billId === b.id || String(t.sourceId || "").startsWith(`${b.id}:`))))); }} style={{ background: "none", border: "none", color: BRAND.crimson, cursor: "pointer" }}><Trash2 size={15} /></button>
+                {!b.paid && <button onClick={(e) => { e.stopPropagation(); markPaid(b); }} style={{ background: BRAND.green, color: "#fff", border: "none", borderRadius: 8, padding: "6px 10px", fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}>ثبت پرداخت</button>}
+                <button onClick={(e) => { e.stopPropagation(); setBills((p) => p.filter((x) => x.id !== b.id)); setTransactions?.((p) => p.filter((t) => !(t.sourceType === "bill" && (t.billId === b.id || String(t.sourceId || "").startsWith(`${b.id}:`))))); }} style={{ background: "none", border: "none", color: BRAND.crimson, cursor: "pointer" }}><Trash2 size={15} /></button>
               </div>
+            </div>
+            {expandedId === b.id && (
+              <DetailBox lines={[
+                ["نوع قبض", b.title],
+                ["مبلغ", b.amount ? `${toFaInt(b.amount)} ریال` : "ثبت نشده"],
+                ["سررسید", b.dueDate ? faLongDate(new Date(b.dueDate)) : "—"],
+                ["وضعیت", b.paid ? "پرداخت شده" : d < 0 ? "سررسید گذشته" : `${toFaInt(d)} روز مانده`],
+                ["تکرار ماهانه", b.recurringMonthly ? "بله" : "خیر"],
+                ["حساب پرداخت", accounts.find((a) => a.id === b.accountId)?.name || "انتخاب نشده"],
+              ]} />
+            )}
             </div>
           );
         })}
@@ -5959,8 +6101,10 @@ function PersonsManager({ persons, setPersons }) {
   </div>;
 }
 
-function DebtsManager({ debts, setDebts, persons, accounts, setTransactions }) {
+function DebtsManager({ debts, setDebts, persons, accounts, setTransactions, focusId, setFocusId }) {
   const st = useStyles();
+  const [expandedId, setExpandedId] = useState(null);
+  useFocusItem(focusId, setFocusId, setExpandedId);
   const [form, setForm] = useState({ personId: "", kind: "receivable", amount: "", dueDate: todayISO(), note: "", accountId: "" });
   function add() {
     const amount = Number(form.amount || 0); if (!form.personId || !amount) return;
@@ -5981,13 +6125,20 @@ function DebtsManager({ debts, setDebts, persons, accounts, setTransactions }) {
     </div>
     <div style={{ ...st.card, padding: "4px 12px" }}>
       {open.length === 0 && <EmptyRow text="بدهی یا طلب باز وجود ندارد" />}
-      {open.map((d) => { const person = persons.find((p) => p.id === d.personId); return <Row key={d.id} title={person?.name || "طرف حساب حذف‌شده"} subtitle={`${d.kind === "receivable" ? "طلب" : "بدهی"} · سررسید ${faLongDate(new Date(d.dueDate))}`} value={`${toFaInt(d.amount)} ریال`} valueColor={d.kind === "receivable" ? BRAND.darkgreen : BRAND.crimson}
-        extra={<button onClick={() => {
+      {open.map((d) => { const person = persons.find((p) => p.id === d.personId); return <div key={d.id} id={`item-${d.id}`}><Row onClick={() => setExpandedId(expandedId === d.id ? null : d.id)} title={person?.name || "طرف حساب حذف‌شده"} subtitle={`${d.kind === "receivable" ? "طلب" : "بدهی"} · سررسید ${faLongDate(new Date(d.dueDate))}`} value={`${toFaInt(d.amount)} ریال`} valueColor={d.kind === "receivable" ? BRAND.darkgreen : BRAND.crimson}
+        extra={<button onClick={(e) => { e.stopPropagation();
           if (!d.accountId) { alert("حساب تسویه برای این بدهی انتخاب نشده است."); return; }
           const tx = { id: uid(), type: d.kind === "receivable" ? "income" : "expense", amount: d.amount, accountId: d.accountId, date: todayISO(), time: new Date().toTimeString().slice(0,5), note: `${d.kind === "receivable" ? "وصول طلب" : "پرداخت بدهی"} - ${person?.name || "طرف حساب"}`, sourceType: "debt", sourceId: d.id, debtId: d.id, categoryId: d.kind === "receivable" ? "cat-debt-receivable" : "cat-debt-payable", isPnlExcluded: true };
           setTransactions?.((prev) => postOnce(prev, tx));
           setDebts((p) => p.map((x) => x.id === d.id ? { ...x, settled: true, settledAt: todayISO(), settlementTransactionId: tx.id } : x));
-        }} style={{ ...miniBtn, color: BRAND.green }}><Check size={14}/></button>} chevron={null} />; })}
+        }} style={{ ...miniBtn, color: BRAND.green }}><Check size={14}/></button>} chevron={null} />{expandedId === d.id && <DetailBox lines={[
+        ["طرف حساب", person?.name || "طرف حساب حذف‌شده"],
+        ["نوع", d.kind === "receivable" ? "طلب از دیگران" : "بدهی به دیگران"],
+        ["مبلغ", `${toFaInt(d.amount)} ریال`],
+        ["سررسید", d.dueDate ? faLongDate(new Date(d.dueDate)) : "—"],
+        ["حساب تسویه", accounts.find((a) => a.id === d.accountId)?.name || "انتخاب نشده"],
+        ["توضیحات", d.note || "—"],
+      ]} />}</div>; })}
     </div>
   </div>;
 }
